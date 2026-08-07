@@ -505,7 +505,7 @@ tbody tr:hover{ background:var(--panel-2); }
       <div class="topbar">
         <div>
           <div class="pagetitle">Opportunities</div>
-          <div class="pagesub"><span class="live-pulse"></span>Simulated live price · alerts fire the moment a signal flips</div>
+          <div class="pagesub"><span class="live-pulse"></span>Live price (real via Google Finance feed, or simulated) · alerts fire the moment a signal flips</div>
         </div>
         <div class="toolbar">
           <div class="segmented" id="segOppType">
@@ -1378,16 +1378,16 @@ document.getElementById('btnClearFeed').addEventListener('click', ()=>{
   toast('Live feed disconnected — back to simulated prices');
 });
 
-// fast tick (3s): jitter, anchored to the real feed price when available so it never drifts away from reality
+// fast tick (3s): symbols matched to the live feed hold the exact fetched price (static, no fake motion) —
+// only symbols with no real anchor fall back to a simulated jitter so the app still feels alive without one.
 setInterval(()=>{
-  const jitter = base => +(base * (1 + (Math.random()-0.5)*0.003)).toFixed(2);
   openPositions.forEach(p=>{
     const anchor = liveFeedCache[p.symbol.toUpperCase()];
-    p.ltp = anchor!=null ? jitter(anchor) : +(p.ltp * (1 + (Math.random()-0.5)*0.006)).toFixed(2);
+    p.ltp = anchor!=null ? anchor : +(p.ltp * (1 + (Math.random()-0.5)*0.006)).toFixed(2);
   });
   opportunities.forEach(o=>{
     const anchor = liveFeedCache[o.symbol.toUpperCase()];
-    o.ltp = anchor!=null ? jitter(anchor) : +(o.ltp * (1 + (Math.random()-0.5)*0.006)).toFixed(2);
+    o.ltp = anchor!=null ? anchor : +(o.ltp * (1 + (Math.random()-0.5)*0.006)).toFixed(2);
   });
   checkOppAlerts();
   checkPosAlerts();
