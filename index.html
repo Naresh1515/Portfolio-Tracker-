@@ -445,7 +445,7 @@ tbody tr:hover{ background:var(--panel-2); }
       <div class="topbar">
         <div>
           <div class="pagetitle">Open Positions</div>
-          <div class="pagesub"><span class="live-pulse"></span>Live price feed (simulated) · updates every 3s</div>
+          <div class="pagesub"><span class="live-pulse"></span>Live price (real via Google Finance feed, or simulated) · target &amp; stop-loss alerts</div>
         </div>
         <div class="toolbar">
           <div class="segmented" id="segPosType">
@@ -453,20 +453,50 @@ tbody tr:hover{ background:var(--panel-2); }
             <button data-seg="carryforward">Carryforward</button>
             <button data-seg="intraday">Intraday</button>
           </div>
+          <div class="segmented" id="segPosSide">
+            <button class="active" data-seg="all">Buy &amp; Sell</button>
+            <button data-seg="BUY">Buy only</button>
+            <button data-seg="SELL">Sell only</button>
+          </div>
           <select class="select" id="brokerFilterPos"><option value="all">All brokers</option></select>
-          <button class="btn" id="btnAddPosition">+ Add position</button>
+          <button class="btn primary" id="btnAddPosition">+ New position</button>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="posFormPanel">
+        <div class="panel-title" style="margin-bottom:12px;">New Position</div>
+        <div class="form-grid">
+          <div><label>Symbol</label><input type="text" id="pSymbol" placeholder="RELIANCE"></div>
+          <div style="grid-column:span 2;">
+            <label>Entry Side</label>
+            <div class="segmented" id="pSideToggle" style="width:100%;">
+              <button type="button" class="active" data-side="BUY" style="flex:1;">Buy (Long)</button>
+              <button type="button" data-side="SELL" style="flex:1;">Sell (Short)</button>
+            </div>
+          </div>
+          <div><label>Product</label><select id="pProduct"><option value="intraday">Intraday</option><option value="carryforward">Carryforward</option></select></div>
+          <div><label>Quantity</label><input type="number" id="pQty" placeholder="100"></div>
+          <div><label>Entry / Avg Price</label><input type="number" id="pAvg" placeholder="2450.00" step="0.05"></div>
+          <div><label>Strategy</label><select id="pStrategy"></select></div>
+          <div><label>Broker</label><select id="pBroker"></select></div>
+          <div><label>Stop Loss (optional)</label><input type="number" id="pStopLoss" placeholder="—" step="0.05"></div>
+          <div><label>Target (optional)</label><input type="number" id="pTarget" placeholder="—" step="0.05"></div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn primary" id="btnSavePosition">Add position</button>
+          <button class="btn ghost" id="btnCancelPosition">Cancel</button>
         </div>
       </div>
       <div class="panel">
         <div style="overflow-x:auto;">
         <table>
           <thead><tr>
-            <th>Symbol</th><th>Type</th><th>Side</th><th>Qty</th><th>Avg Price</th><th>LTP</th><th>Chg%</th><th>Unrealized P&amp;L</th><th>Strategy</th><th>Broker</th><th></th>
+            <th>Symbol</th><th>Type</th><th>Side</th><th>Qty</th><th>Avg Price</th><th>LTP</th><th>Chg%</th><th>Unrealized P&amp;L</th><th>Stop Loss</th><th>Target</th><th>Signal</th><th>Strategy</th><th>Broker</th><th></th>
           </tr></thead>
           <tbody id="positionsBody"></tbody>
         </table>
         </div>
-        <div style="margin-top:10px; font-size:11px; color:var(--text-faint);">Tip: change the Strategy dropdown any time to reassign a live position. Use <b>Close</b> to book the trade — it moves into your Journal / All Trades with brokerage &amp; charges deducted automatically.</div>
+        <div style="margin-top:10px; font-size:11px; color:var(--text-faint); line-height:1.6;">Set a <b>Stop Loss</b> and <b>Target</b> to get live alerts on this position — <b>TARGET HIT</b> or <b>SL HIT</b> fires a notification + vibration the moment price crosses either level (leave blank to skip alerting on that row). Change the Strategy dropdown any time to reassign a live position. Use <b>Close</b> to book the trade — it moves into your Journal / All Trades with brokerage &amp; charges deducted automatically.</div>
       </div>
     </section>
 
@@ -671,7 +701,14 @@ tbody tr:hover{ background:var(--panel-2); }
       <div class="panel">
         <div class="panel-head">
           <div class="panel-title">All Trades <span class="n" id="tradeCount"></span></div>
-          <select class="select" id="reportsBrokerFilter"><option value="all">All brokers</option></select>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <select class="select" id="reportsSideFilter">
+              <option value="all">Buy &amp; Sell</option>
+              <option value="BUY">Buy only</option>
+              <option value="SELL">Sell only</option>
+            </select>
+            <select class="select" id="reportsBrokerFilter"><option value="all">All brokers</option></select>
+          </div>
         </div>
         <div style="overflow-x:auto;">
         <table>
@@ -717,7 +754,7 @@ const STORE_KEY = 'ledger_terminal_v1';
 function saveState(){
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentOppSeg, currentMonth, liveFeedUrl,
+      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
@@ -806,6 +843,7 @@ let currentSeg = (saved && saved.currentSeg) || 'all';       // dashboard filter
 let currentPosSeg = (saved && saved.currentPosSeg) || 'all';    // positions filter
 let currentBroker = (saved && saved.currentBroker) || 'all';    // broker filter (dashboard/reports)
 let currentPosBroker = (saved && saved.currentPosBroker) || 'all'; // broker filter (positions)
+let currentPosSide = (saved && saved.currentPosSide) || 'all';   // Buy/Sell filter (positions)
 let currentOppSeg = (saved && saved.currentOppSeg) || 'all';    // opportunities filter (swing/intraday)
 let currentMonth = (saved && saved.currentMonth) || '2026-08';
 let calMonth = {y:2026, m:7}; // 0-indexed
@@ -1058,10 +1096,22 @@ function renderStrategyList(){
 }
 
 /* ================= POSITIONS ================= */
+function positionSignal(p){
+  if(p.stopLoss==null && p.target==null) return null; // no alerting configured for this row
+  if(p.side==='BUY'){
+    if(p.stopLoss!=null && p.ltp<=p.stopLoss) return 'SL HIT';
+    if(p.target!=null && p.ltp>=p.target) return 'TARGET HIT';
+  } else {
+    if(p.stopLoss!=null && p.ltp>=p.stopLoss) return 'SL HIT';
+    if(p.target!=null && p.ltp<=p.target) return 'TARGET HIT';
+  }
+  return 'HOLDING';
+}
 function renderPositions(){
   const list = openPositions.filter(p=>
     (currentPosSeg==='all' ? true : p.product===currentPosSeg) &&
-    (currentPosBroker==='all' ? true : p.broker===currentPosBroker)
+    (currentPosBroker==='all' ? true : p.broker===currentPosBroker) &&
+    (currentPosSide==='all' ? true : p.side===currentPosSide)
   );
   const stratOpts = s => strategies.map(x=>`<option value="${x.id}" ${x.id===s?'selected':''}>${x.name}</option>`).join('');
   const brokerOpts = b => brokerNames().map(n=>`<option value="${n}" ${n===b?'selected':''}>${n}</option>`).join('');
@@ -1069,6 +1119,8 @@ function renderPositions(){
     const dir = p.side==='BUY'?1:-1;
     const pnl = (p.ltp - p.avg)*p.qty*dir;
     const chg = ((p.ltp-p.avg)/p.avg*100*dir);
+    const signal = positionSignal(p);
+    const sigClass = signal==='TARGET HIT' ? 'sig-buy' : signal==='SL HIT' ? 'sig-sell' : 'sig-notrade';
     return `<tr>
       <td class="name-cell">${p.symbol}</td>
       <td><span class="badge ${p.product==='carryforward'?'cf':'intra'}">${p.product==='carryforward'?'Carryforward':'Intraday'}</span></td>
@@ -1078,12 +1130,23 @@ function renderPositions(){
       <td><span class="live-pulse"></span>${fmt2(p.ltp)}</td>
       <td class="${chg>=0?'pos':'neg'}">${chg>=0?'+':''}${chg.toFixed(2)}%</td>
       <td class="${pnlClass(pnl)}">${fmt(pnl)}</td>
+      <td><input type="number" step="0.05" value="${p.stopLoss??''}" placeholder="—" style="width:80px; font-family:var(--font-mono); font-size:11.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text);" onchange="updatePositionLevel('${p.id}','stopLoss', this.value)"></td>
+      <td><input type="number" step="0.05" value="${p.target??''}" placeholder="—" style="width:80px; font-family:var(--font-mono); font-size:11.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text);" onchange="updatePositionLevel('${p.id}','target', this.value)"></td>
+      <td>${signal ? `<span class="badge ${sigClass}">${signal}</span>` : `<span style="color:var(--text-faint); font-size:11px;">Set SL/Target</span>`}</td>
       <td><select class="select" style="font-size:11px; padding:5px 7px;" onchange="updatePositionStrategy('${p.id}', this.value)">${stratOpts(p.strategyId)}</select></td>
       <td><select class="select" style="font-size:11px; padding:5px 7px;" onchange="updatePositionBroker('${p.id}', this.value)">${brokerOpts(p.broker)}</select></td>
       <td><button class="btn ghost" style="padding:5px 9px; font-size:11px;" onclick="closePosition('${p.id}')">Close</button></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="11"><div class="empty-state">No open positions in this filter.</div></td></tr>`;
+  }).join('') : `<tr><td colspan="14"><div class="empty-state">No open positions in this filter.</div></td></tr>`;
 }
+window.updatePositionLevel = function(id, field, val){
+  const p = openPositions.find(p=>p.id===id); if(!p) return;
+  p[field] = val==='' ? null : +val;
+  if(p.lastSignal!==undefined) delete p.lastSignal; // reset so a newly-set level doesn't instantly "trigger" from stale state
+  saveState();
+  renderPositions();
+  toast(`${field==='stopLoss'?'Stop loss':'Target'} updated for ${p.symbol}`);
+};
 window.updatePositionStrategy = function(id, strategyId){
   const p = openPositions.find(p=>p.id===id); if(!p) return;
   p.strategyId = strategyId;
@@ -1162,19 +1225,22 @@ document.getElementById('btnEnableAlerts').addEventListener('click', ()=>{
     }
   });
 });
+function fireAlert(title, body, vibrationPattern, tag, targetPage){
+  toast(`🔔 ${title}: ${body}`);
+  if(navigator.vibrate) navigator.vibrate(vibrationPattern);
+  if(alertsEnabled && 'Notification' in window && Notification.permission==='granted'){
+    try{
+      const n = new Notification(title, {body, tag});
+      n.onclick = ()=>{ window.focus(); goToPage(targetPage); };
+    }catch(e){ /* some mobile browsers restrict direct Notification(); ignore silently */ }
+  }
+}
 function fireOppAlert(o, signal){
   const title = `${o.symbol} — ${signal}`;
   const body = signal==='BUY'
     ? `Price ${fmt2(o.ltp)} reached your entry zone (planned entry ${fmt2(o.entry)}).`
     : `Target ${fmt2(o.target)} reached — price now ${fmt2(o.ltp)}. Consider booking.`;
-  toast(`🔔 ${title}: ${body}`);
-  if(navigator.vibrate) navigator.vibrate(signal==='BUY' ? [180,90,180] : [180,90,180,90,180]);
-  if(alertsEnabled && 'Notification' in window && Notification.permission==='granted'){
-    try{
-      const n = new Notification(title, {body, tag:'opp-'+o.id});
-      n.onclick = ()=>{ window.focus(); goToPage('opportunities'); };
-    }catch(e){ /* some mobile browsers restrict direct Notification(); ignore silently */ }
-  }
+  fireAlert(title, body, signal==='BUY' ? [180,90,180] : [180,90,180,90,180], 'opp-'+o.id, 'opportunities');
 }
 function checkOppAlerts(){
   opportunities.forEach(o=>{
@@ -1184,6 +1250,40 @@ function checkOppAlerts(){
       fireOppAlert(o, signal);
     }
     o.lastSignal = signal;
+  });
+}
+function firePosAlert(p, signal){
+  const title = `${p.symbol} — ${signal}`;
+  const body = signal==='TARGET HIT'
+    ? `Target ${fmt2(p.target)} reached — LTP now ${fmt2(p.ltp)}. Consider booking profit.`
+    : `Stop loss ${fmt2(p.stopLoss)} breached — LTP now ${fmt2(p.ltp)}. Consider exiting to limit loss.`;
+  fireAlert(title, body, signal==='TARGET HIT' ? [180,90,180] : [180,90,180,90,180,90,180], 'pos-'+p.id, 'positions');
+}
+function checkPosAlerts(){
+  openPositions.forEach(p=>{
+    const signal = positionSignal(p); // null (no levels set), 'HOLDING', 'TARGET HIT', or 'SL HIT'
+    if(p.lastSignal===undefined){ p.lastSignal = signal; return; } // don't alert on first load
+    if(signal!==p.lastSignal && (signal==='TARGET HIT' || signal==='SL HIT')){
+      firePosAlert(p, signal);
+    }
+    p.lastSignal = signal;
+  });
+}
+function firePositionAlert(p, signal){
+  const title = `${p.symbol} — ${signal}`;
+  const body = signal==='TARGET HIT'
+    ? `Target ${fmt2(p.target)} reached — LTP ${fmt2(p.ltp)}. Consider booking profit.`
+    : `Stop loss ${fmt2(p.stopLoss)} breached — LTP ${fmt2(p.ltp)}. Consider exiting to limit loss.`;
+  fireAlert(title, body, signal==='TARGET HIT' ? [180,90,180] : [180,90,180,90,180,90,180], 'pos-'+p.id, 'positions');
+}
+function checkPositionAlerts(){
+  openPositions.forEach(p=>{
+    const signal = positionSignal(p);
+    if(p.lastSignal===undefined){ p.lastSignal = signal; return; } // don't alert on first load
+    if(signal && signal!==p.lastSignal && (signal==='TARGET HIT' || signal==='SL HIT')){
+      firePositionAlert(p, signal);
+    }
+    p.lastSignal = signal;
   });
 }
 
@@ -1290,6 +1390,7 @@ setInterval(()=>{
     o.ltp = anchor!=null ? jitter(anchor) : +(o.ltp * (1 + (Math.random()-0.5)*0.006)).toFixed(2);
   });
   checkOppAlerts();
+  checkPosAlerts();
   if(document.getElementById('page-positions').classList.contains('active')) renderPositions();
   if(document.getElementById('page-opportunities').classList.contains('active')) renderOpportunities();
   saveState();
@@ -1299,13 +1400,53 @@ setInterval(()=>{
 setInterval(()=>{ if(liveFeedUrl) fetchLiveFeed(false); }, 20000);
 
 document.getElementById('btnAddPosition').addEventListener('click', ()=>{
-  const symbol = prompt('Symbol (e.g. TATAMOTORS)'); if(!symbol) return;
-  const qty = +prompt('Quantity','50') || 50;
-  const avg = +prompt('Average price','1000') || 1000;
-  const side = confirm('BUY? Cancel = SELL') ? 'BUY' : 'SELL';
-  const product = confirm('Carryforward? Cancel = Intraday') ? 'carryforward' : 'intraday';
-  openPositions.push({id:'p'+Date.now(), symbol:symbol.toUpperCase(), product, side, qty, avg, ltp:avg, strategyId:strategies[0].id, broker:brokerNames()[0]});
-  toast('Position added'); saveState(); renderPositions();
+  document.getElementById('posFormPanel').classList.remove('hidden');
+});
+document.getElementById('btnCancelPosition').addEventListener('click', ()=>{
+  document.getElementById('posFormPanel').classList.add('hidden');
+});
+document.getElementById('pSideToggle').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#pSideToggle button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  if(e.target.dataset.side==='SELL'){
+    // Cash-equity short selling is intraday-only in India — carried-forward shorts aren't valid, so guide the product field
+    document.getElementById('pProduct').value = 'intraday';
+    toast('Sell (short) entries are intraday-only in cash equity — Product set to Intraday');
+  }
+});
+document.getElementById('btnSavePosition').addEventListener('click', ()=>{
+  const symbol = document.getElementById('pSymbol').value.trim().toUpperCase();
+  const side = document.querySelector('#pSideToggle button.active').dataset.side;
+  let product = document.getElementById('pProduct').value;
+  const qty = +document.getElementById('pQty').value;
+  const avg = +document.getElementById('pAvg').value;
+  if(!symbol || !qty || !avg){ toast('Symbol, quantity and entry price are all required'); return; }
+  if(side==='SELL' && product==='carryforward'){
+    toast('Short (Sell) positions must be Intraday in cash equity — switched automatically');
+    product = 'intraday';
+  }
+  const stopLoss = document.getElementById('pStopLoss').value ? +document.getElementById('pStopLoss').value : null;
+  const target = document.getElementById('pTarget').value ? +document.getElementById('pTarget').value : null;
+  openPositions.push({
+    id:'p'+Date.now(), symbol, product, side, qty, avg, ltp:avg,
+    strategyId: document.getElementById('pStrategy').value, broker: document.getElementById('pBroker').value,
+    stopLoss, target
+  });
+  ['pSymbol','pQty','pAvg','pStopLoss','pTarget'].forEach(id=>document.getElementById(id).value='');
+  document.querySelectorAll('#pSideToggle button').forEach(b=>b.classList.toggle('active', b.dataset.side==='BUY'));
+  document.getElementById('posFormPanel').classList.add('hidden');
+  saveState();
+  toast(`${symbol} added as a ${side==='BUY'?'Buy (long)':'Sell (short)'} position`);
+  renderPositions();
+});
+document.getElementById('segPosSide').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#segPosSide button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  currentPosSide = e.target.dataset.seg;
+  saveState();
+  renderPositions();
 });
 
 /* ================= OPPORTUNITIES ================= */
@@ -1381,7 +1522,7 @@ window.markOppAsTaken = function(id){
   const product = o.tradeType==='swing' ? 'carryforward' : 'intraday';
   openPositions.push({
     id:'p'+Date.now(), symbol:o.symbol, product, side:o.side, qty, avg:actualEntry, ltp:o.ltp,
-    strategyId:o.strategyId, broker:o.broker
+    strategyId:o.strategyId, broker:o.broker, target:o.target ?? null, stopLoss:o.stopLoss ?? null
   });
   opportunities = opportunities.filter(x=>x.id!==id);
   toast(`${o.symbol} moved to Open Positions (${qty} qty @ ${fmt2(actualEntry)})`);
@@ -1429,6 +1570,7 @@ function populateStrategySelects(){
   document.getElementById('fStrategy').innerHTML = opts;
   document.getElementById('journalStrategyFilter').innerHTML = '<option value="all">All strategies</option>' + opts;
   document.getElementById('oStrategy').innerHTML = opts;
+  document.getElementById('pStrategy').innerHTML = opts;
 }
 function populateBrokerSelects(){
   const bOpts = brokerNames().map(n=>`<option value="${n}">${n}</option>`).join('');
@@ -1439,6 +1581,7 @@ function populateBrokerSelects(){
   document.getElementById('journalBrokerFilter').innerHTML = withAll;
   document.getElementById('reportsBrokerFilter').innerHTML = withAll;
   document.getElementById('oBroker').innerHTML = bOpts;
+  document.getElementById('pBroker').innerHTML = bOpts;
   document.getElementById('brokerFilterDash').value = currentBroker;
   document.getElementById('brokerFilterPos').value = currentPosBroker;
 }
@@ -1503,6 +1646,7 @@ function recalcAllCharges(){
 }
 document.getElementById('journalBrokerFilter').addEventListener('change', renderJournal);
 document.getElementById('reportsBrokerFilter').addEventListener('change', renderAllTradesTable);
+document.getElementById('reportsSideFilter').addEventListener('change', renderAllTradesTable);
 document.getElementById('btnNewEntry').addEventListener('click', ()=>{
   document.getElementById('entryFormPanel').classList.remove('hidden');
   document.getElementById('fDate').value = new Date().toISOString().slice(0,10);
@@ -1642,7 +1786,8 @@ function renderCalendar(){
 /* ================= REPORTS / TRADES TABLE ================= */
 function renderAllTradesTable(){
   const brokerFilter = document.getElementById('reportsBrokerFilter').value;
-  const list = [...trades].filter(t=> brokerFilter==='all' || t.broker===brokerFilter).sort((a,b)=>b.date.localeCompare(a.date));
+  const sideFilter = document.getElementById('reportsSideFilter').value;
+  const list = [...trades].filter(t=> (brokerFilter==='all' || t.broker===brokerFilter) && (sideFilter==='all' || t.side===sideFilter)).sort((a,b)=>b.date.localeCompare(a.date));
   document.getElementById('tradeCount').textContent = `${list.length} trades`;
   const stratOpts = s => strategies.map(x=>`<option value="${x.id}" ${x.id===s?'selected':''}>${x.name}</option>`).join('');
   const brokerOpts = b => brokerNames().map(n=>`<option value="${n}" ${n===b?'selected':''}>${n}</option>`).join('');
@@ -1810,9 +1955,11 @@ populateMonthSelect();
 // sync segmented control buttons to restored filter state
 document.querySelectorAll('#segFilter button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentSeg));
 document.querySelectorAll('#segPosType button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentPosSeg));
+document.querySelectorAll('#segPosSide button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentPosSide));
 document.querySelectorAll('#segOppType button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentOppSeg));
 updateAlertButtonUI();
 opportunities.forEach(o=>{ if(o.lastSignal===undefined) o.lastSignal = oppSignal(o); });
+openPositions.forEach(p=>{ if(p.lastSignal===undefined) p.lastSignal = positionSignal(p); });
 document.getElementById('feedUrlInput').value = liveFeedUrl;
 updateFeedStatusUI();
 if(liveFeedUrl) fetchLiveFeed(false);
