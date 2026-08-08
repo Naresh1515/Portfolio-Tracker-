@@ -647,7 +647,7 @@ tbody tr:hover{ background:var(--panel-2); }
 
         <div id="syncSheetsFields">
           <div class="form-grid" style="grid-template-columns:2fr auto auto; align-items:end; margin-bottom:4px;">
-            <div><label>Apps Script Web App URL</label><input type="text" id="syncSheetsUrl" placeholder="https://script.google.com/macros/s/XXXXX/exec"></div>
+            <div><label>Apps Script Web App URL</label><input type="text" id="syncSheetsUrl" placeholder="https://script.google.com/macros/s/XXXXX/exec" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false"></div>
             <div><button class="btn primary" id="btnConnectSheetsSync" style="height:38px;">Connect</button></div>
             <div><button class="btn ghost" id="btnDisconnectSync2" style="height:38px;">Disconnect</button></div>
           </div>
@@ -666,7 +666,7 @@ tbody tr:hover{ background:var(--panel-2); }
             </div>
           </div>
           <div class="form-grid" style="grid-template-columns:2fr auto auto; align-items:end; margin-bottom:4px;">
-            <div><label>Sync code (same code on every device you want linked)</label><input type="text" id="syncCodeInput" placeholder="e.g. my-portfolio-7k2"></div>
+            <div><label>Sync code (same code on every device — not case-sensitive)</label><input type="text" id="syncCodeInput" placeholder="e.g. my-portfolio-7k2" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false"></div>
             <div><button class="btn primary" id="btnConnectSync" style="height:38px;">Connect</button></div>
             <div><button class="btn ghost" id="btnDisconnectSync" style="height:38px;">Disconnect</button></div>
           </div>
@@ -796,14 +796,15 @@ tbody tr:hover{ background:var(--panel-2); }
 <script>
 /* ================= PERSISTENCE ================= */
 const STORE_KEY = 'ledger_terminal_v1';
-function saveState(){
+function saveState(syncCloud){
+  if(syncCloud===undefined) syncCloud = true; // default: real data changes DO sync; pass false for cosmetic/ephemeral updates like LTP ticks
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
       trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
-  if(syncConnected && !syncApplyingRemote) schedulePush();
+  if(syncCloud && syncConnected && !syncApplyingRemote) schedulePush();
 }
 function loadState(){
   try{
@@ -905,6 +906,7 @@ let syncMethod = (saved && saved.syncMethod) || 'sheets'; // 'sheets' | 'firebas
 let syncSheetsUrl = (saved && saved.syncSheetsUrl) || '';
 let syncSheetsPollTimer = null;
 let syncSheetsLastUpdatedAt = 0;
+let syncLastKnownUpdatedAt = 0; // the updatedAt we believe is currently sitting in the cloud — used to detect a stale push before it happens
 let syncConnected = false;
 let syncApplyingRemote = false;
 let syncPushTimer = null;
@@ -1372,7 +1374,12 @@ function updateSyncStatusUI(message){
   } else {
     badge.textContent = 'Not connected'; badge.className = 'badge sig-notrade';
   }
-  info.textContent = message || (syncConnected ? `Synced live to code "${syncCode}" — changes on any connected device appear here within a couple of seconds.` : 'Not connected — this device\'s data stays local only.');
+  let connectedDetail = '';
+  if(syncConnected){
+    if(syncMethod==='firebase') connectedDetail = `Synced live to code "${syncCode}" -- compare this exact code on your other device if data is not matching.`;
+    else if(syncMethod==='sheets') connectedDetail = `Synced to script ending in ...${syncSheetsUrl.slice(-14)} -- compare this on your other device if data is not matching.`;
+  }
+  info.textContent = message || (connectedDetail || 'Not connected -- this device data stays local only.');
 }
 function parseFirebaseConfig_(raw){
   let text = (raw||'').trim();
@@ -1389,7 +1396,7 @@ function parseFirebaseConfig_(raw){
 }
 async function connectSync(configText, code){
   configText = (configText||'').trim();
-  code = (code||'').trim();
+  code = (code||'').trim().toLowerCase();
   if(!configText || !code){ toast('Paste your Firebase config and a sync code first'); return; }
   const config = parseFirebaseConfig_(configText);
   if(!config || !config.apiKey || !config.projectId){
@@ -1406,7 +1413,9 @@ async function connectSync(configText, code){
     if(snap.exists){
       applyRemoteData(snap.data());
     } else {
-      await syncDocRef.set(buildSyncPayload());
+      const payload = buildSyncPayload();
+      await syncDocRef.set(payload);
+      syncLastKnownUpdatedAt = payload.updatedAt;
     }
     syncFirebaseUnsub = syncDocRef.onSnapshot(doc=>{
       if(doc.exists) applyRemoteData(doc.data());
@@ -1443,18 +1452,39 @@ function buildSyncPayload(){
 }
 function schedulePush(){
   clearTimeout(syncPushTimer);
-  syncPushTimer = setTimeout(()=>{
+  syncPushTimer = setTimeout(async ()=>{
     if(!syncConnected) return;
-    if(syncMethod==='firebase' && syncDocRef){
-      syncDocRef.set(buildSyncPayload()).catch(e=>{ updateSyncStatusUI('Push failed: '+e.message); });
-    } else if(syncMethod==='sheets' && syncSheetsUrl){
-      pushToSheets().catch(e=>{ updateSyncStatusUI('Push failed: '+e.message); });
+    try{
+      if(syncMethod==='firebase' && syncDocRef){
+        // conflict check: has the cloud moved on without us since we last saw it?
+        const snap = await syncDocRef.get();
+        const remote = snap.exists ? snap.data() : null;
+        if(remote && remote.updatedAt && syncLastKnownUpdatedAt && remote.updatedAt !== syncLastKnownUpdatedAt){
+          applyRemoteData(remote);
+          toast('Cloud data changed on another device just before your save — pulled the latest version. Please redo your last change if needed.');
+          return;
+        }
+        const payload = buildSyncPayload();
+        await syncDocRef.set(payload);
+        syncLastKnownUpdatedAt = payload.updatedAt;
+      } else if(syncMethod==='sheets' && syncSheetsUrl){
+        const remote = await pullFromSheets(false, true); // peek only, does not auto-apply here
+        if(remote && remote.updatedAt && syncLastKnownUpdatedAt && remote.updatedAt !== syncLastKnownUpdatedAt){
+          applyRemoteData(remote);
+          toast('Cloud data changed on another device just before your save — pulled the latest version. Please redo your last change if needed.');
+          return;
+        }
+        await pushToSheets();
+      }
+    }catch(e){
+      updateSyncStatusUI('Push failed: '+e.message);
     }
   }, 1200);
 }
 function applyRemoteData(data){
   if(!data) return;
   syncApplyingRemote = true;
+  syncLastKnownUpdatedAt = data.updatedAt || Date.now();
   if(data.trades) trades = data.trades;
   if(data.openPositions) openPositions = data.openPositions;
   if(data.opportunities) opportunities = data.opportunities;
@@ -1487,13 +1517,15 @@ async function pushToSheets(){
     body: JSON.stringify(payload)
   });
   syncSheetsLastUpdatedAt = payload.updatedAt;
+  syncLastKnownUpdatedAt = payload.updatedAt;
 }
-async function pullFromSheets(force){
+async function pullFromSheets(force, peek){
   if(!syncSheetsUrl) return;
   const res = await fetch(syncSheetsUrl + (syncSheetsUrl.includes('?') ? '&' : '?') + 'cachebust=' + Date.now());
   const text = await res.text();
   let data;
   try{ data = JSON.parse(text); }catch(e){ throw new Error('Sheet returned invalid data — check the Apps Script deployment'); }
+  if(peek) return data; // caller decides what to do — used by the pre-push conflict check
   if(force || (data.updatedAt && data.updatedAt !== syncSheetsLastUpdatedAt)){
     syncSheetsLastUpdatedAt = data.updatedAt || Date.now();
     applyRemoteData(data);
@@ -1652,7 +1684,7 @@ setInterval(()=>{
   checkPosAlerts();
   if(document.getElementById('page-positions').classList.contains('active')) renderPositions();
   if(document.getElementById('page-opportunities').classList.contains('active')) renderOpportunities();
-  saveState();
+  saveState(false); // local-only — LTP jitter is cosmetic per device and must never overwrite cloud data
 }, 3000);
 
 // slow poll (20s): re-sync the real anchor prices from the published Google Sheet
