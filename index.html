@@ -8,7 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ledger">
-<link rel="manifest" href='data:application/manifest+json,{"name":"Ledger Terminal","short_name":"Ledger","start_url":"./index.html","display":"standalone","background_color":"%230A0D13","theme_color":"%230A0D13","orientation":"portrait-primary","icons":[{"src":"data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 192 192%27%3E%3Crect width=%27192%27 height=%27192%27 rx=%2740%27 fill=%27%230A0D13%27/%3E%3Ctext x=%2796%27 y=%27130%27 font-family=%27Arial%27 font-size=%27120%27 font-weight=%27bold%27 fill=%27%23F0B90B%27 text-anchor=%27middle%27%3EL%3C/text%3E%3C/svg%3E","sizes":"192x192","type":"image/svg+xml","purpose":"any maskable"}]}'>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Ledger&nbsp;Terminal — Equity Portfolio &amp; Trading Journal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -505,7 +507,7 @@ tbody tr:hover{ background:var(--panel-2); }
       <div class="topbar">
         <div>
           <div class="pagetitle">Opportunities</div>
-          <div class="pagesub"><span class="live-pulse"></span>Live price (real via Google Finance feed, or simulated) · alerts fire the moment a signal flips</div>
+          <div class="pagesub"><span class="live-pulse"></span>Live price (real via connected Google Finance feed, per-symbol — simulated as fallback) · alerts fire the moment a signal flips</div>
         </div>
         <div class="toolbar">
           <div class="segmented" id="segOppType">
@@ -518,7 +520,7 @@ tbody tr:hover{ background:var(--panel-2); }
         </div>
       </div>
       <div style="margin:-6px 0 14px; font-size:11.5px; color:var(--text-faint); line-height:1.5;">
-        Price shown is a simulated feed (small random moves each tick), not a live NSE/BSE market feed — I don't have a connected market data or broker API in this build. Everything else — signal logic, sound + popup alerts, position transfer — works exactly as it would with a real feed.
+        Each row shows a <b>Live</b> or <b>Sim</b> tag next to its price. Live means that symbol is matched in your connected Reports → Live Data Feed sheet; Sim means it fell back to a simulated tick — usually because that symbol isn't listed in that feed sheet yet, or the feed isn't connected. This is separate from Cloud Sync (which only mirrors your data across devices, not prices).
       </div>
 
       <div class="panel hidden" id="oppFormPanel">
@@ -531,10 +533,23 @@ tbody tr:hover{ background:var(--panel-2); }
           <div><label>Entry Point</label><input type="number" id="oEntry" placeholder="2450.00" step="0.05"></div>
           <div><label>Stop Loss</label><input type="number" id="oStopLoss" placeholder="2410.00" step="0.05"></div>
           <div><label>Target / Exit Point</label><input type="number" id="oTarget" placeholder="2540.00" step="0.05"></div>
-          <div><label>Risk Amount (₹)</label><input type="number" id="oRisk" placeholder="2000" step="1"></div>
           <div><label>Broker (if taken)</label><select id="oBroker"></select></div>
+          <div style="grid-column:span 2;">
+            <label>Risk sizing</label>
+            <div class="segmented" id="oRiskModeToggle" style="width:100%;">
+              <button type="button" class="active" data-mode="absolute" style="flex:1;">Absolute (₹)</button>
+              <button type="button" data-mode="percent" style="flex:1;">% of capital</button>
+            </div>
+          </div>
+          <div id="oRiskAbsoluteWrap"><label>Risk Amount (₹)</label><input type="number" id="oRisk" placeholder="2000" step="1"></div>
+          <div id="oRiskPercentWrap" class="hidden"><label>Risk (% of capital)</label><input type="number" id="oRiskPct" placeholder="1" step="0.1"></div>
+          <div>
+            <label>Total capital (₹) <span style="font-weight:400; color:var(--text-faint);">— used only for % risk</span></label>
+            <input type="number" id="oTotalCapital" step="1">
+          </div>
           <div style="grid-column:span 4;"><label>Notes / Setup Thesis</label><textarea id="oNotes" placeholder="Why this trade — pattern, trigger, confluence..."></textarea></div>
         </div>
+        <div id="oRiskPreview" style="font-size:11.5px; color:var(--text-faint); margin-bottom:10px;"></div>
         <div style="display:flex; gap:8px;">
           <button class="btn primary" id="btnSaveOpportunity">Save opportunity</button>
           <button class="btn ghost" id="btnCancelOpportunity">Cancel</button>
@@ -545,7 +560,7 @@ tbody tr:hover{ background:var(--panel-2); }
         <div style="overflow-x:auto;">
         <table>
           <thead><tr>
-            <th>Symbol</th><th>Type</th><th>Side</th><th>Entry</th><th>Stop Loss</th><th>Target</th><th>Qty (risk-sized)</th><th>LTP</th><th>% From Entry</th><th>Signal</th><th>Strategy</th><th></th>
+            <th>Symbol</th><th>Type</th><th>Side</th><th>Entry</th><th>Stop Loss</th><th>Target</th><th>Qty (risk-sized)</th><th>LTP</th><th>% From Entry</th><th>% To Target</th><th>Signal</th><th>Strategy</th><th></th>
           </tr></thead>
           <tbody id="opportunitiesBody"></tbody>
         </table>
@@ -800,7 +815,7 @@ function saveState(syncCloud){
   if(syncCloud===undefined) syncCloud = true; // default: real data changes DO sync; pass false for cosmetic/ephemeral updates like LTP ticks
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl,
+      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl, totalCapital,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
@@ -898,6 +913,7 @@ let liveFeedUrl = (saved && saved.liveFeedUrl) || '';
 let liveFeedCache = {}; // symbol (uppercase) -> last fetched real price
 let liveFeedStatus = { ok:false, message:'Not connected', lastSync:null };
 let liveFeedInFlight = false;
+let totalCapital = (saved && saved.totalCapital) || 100000; // used only when an opportunity's risk is set as a percentage
 
 // Cloud sync (Firebase) — keeps trades/positions/opportunities/strategies mirrored across devices
 let syncConfigRaw = (saved && saved.syncConfigRaw) || '';
@@ -1741,14 +1757,26 @@ document.getElementById('segPosSide').addEventListener('click', e=>{
 });
 
 /* ================= OPPORTUNITIES ================= */
+function oppRiskAmount(o){
+  if(o.riskMode==='percent'){
+    return (o.riskPct||0)/100 * (o.capitalAtEntry || totalCapital || 0);
+  }
+  return o.riskAmount || 0;
+}
 function oppQty(o){
   const riskPerShare = Math.abs(o.entry - o.stopLoss);
   if(!riskPerShare) return 0;
-  return Math.max(1, Math.floor(o.riskAmount / riskPerShare));
+  return Math.max(1, Math.floor(oppRiskAmount(o) / riskPerShare));
 }
 function oppPctFromEntry(o){
   if(!o.entry) return 0;
   return ((o.ltp - o.entry)/o.entry*100);
+}
+function oppPctToTarget(o){
+  if(!o.target) return null;
+  // distance remaining to target, signed so it reads "how far away" regardless of long/short
+  const dir = o.side==='BUY' ? 1 : -1;
+  return ((o.target - o.ltp)/o.ltp*100*dir);
 }
 function oppSignal(o){
   // Long setup: buy when price returns to/below entry (without breaching stop), sell when target hit, else no trade
@@ -1771,8 +1799,10 @@ function renderOpportunities(){
   document.getElementById('opportunitiesBody').innerHTML = list.length ? list.map(o=>{
     const qty = oppQty(o);
     const pct = oppPctFromEntry(o);
+    const pctTarget = oppPctToTarget(o);
     const signal = oppSignal(o);
     const sigClass = signal==='BUY' ? 'sig-buy' : signal==='SELL' ? 'sig-sell' : 'sig-notrade';
+    const isLive = liveFeedCache[o.symbol.toUpperCase()] != null;
     return `<tr>
       <td class="name-cell">${o.symbol}</td>
       <td><span class="badge ${o.tradeType==='swing'?'swing':'intra'}">${o.tradeType==='swing'?'Swing':'Intraday'}</span></td>
@@ -1781,8 +1811,9 @@ function renderOpportunities(){
       <td>${fmt2(o.stopLoss)}</td>
       <td>${fmt2(o.target)}</td>
       <td>${qty}</td>
-      <td><span class="live-pulse"></span>${fmt2(o.ltp)}</td>
+      <td><span class="badge ${isLive?'sig-buy':'sig-notrade'}" style="margin-right:6px; padding:2px 7px;">${isLive?'Live':'Sim'}</span>${fmt2(o.ltp)}</td>
       <td class="${pct>=0?'pos':'neg'}">${pct>=0?'+':''}${pct.toFixed(2)}%</td>
+      <td class="${pctTarget==null?'':(pctTarget>=0?'pos':'neg')}">${pctTarget==null?'—':(pctTarget>=0?'+':'')+pctTarget.toFixed(2)+'%'}</td>
       <td><span class="badge ${sigClass}">${signal}</span></td>
       <td><select class="select" style="font-size:11px; padding:5px 7px;" onchange="updateOppStrategy('${o.id}', this.value)">${stratOpts(o.strategyId)}</select></td>
       <td style="white-space:nowrap;">
@@ -1790,7 +1821,7 @@ function renderOpportunities(){
         <button class="btn ghost" style="padding:5px 9px; font-size:11px;" onclick="deleteOpportunity('${o.id}')">Delete</button>
       </td>
     </tr>`;
-  }).join('') : `<tr><td colspan="12"><div class="empty-state">No opportunities in this filter yet. Click "New opportunity" to add one.</div></td></tr>`;
+  }).join('') : `<tr><td colspan="13"><div class="empty-state">No opportunities in this filter yet. Click "New opportunity" to add one.</div></td></tr>`;
 }
 window.updateOppStrategy = function(id, strategyId){
   const o = opportunities.find(o=>o.id===id); if(!o) return;
