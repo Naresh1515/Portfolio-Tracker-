@@ -661,8 +661,8 @@ tbody tr:hover{ background:var(--panel-2); }
         <div id="syncFirebaseFields" class="hidden">
           <div class="form-grid" style="grid-template-columns:1fr; margin-bottom:8px;">
             <div>
-              <label>Firebase config (paste the whole object from Firebase Console → Project settings → Your apps)</label>
-              <textarea id="syncConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' style="min-height:70px; font-family:var(--font-mono); font-size:11px;"></textarea>
+              <label>Firebase config — paste exactly what Firebase shows you (unquoted keys, "const ..." wrapper, all fine)</label>
+              <textarea id="syncConfigInput" placeholder='apiKey: "...", authDomain: "...", projectId: "...", storageBucket: "...", messagingSenderId: "...", appId: "..."' style="min-height:70px; font-family:var(--font-mono); font-size:11px;"></textarea>
             </div>
           </div>
           <div class="form-grid" style="grid-template-columns:2fr auto auto; align-items:end; margin-bottom:4px;">
@@ -1374,13 +1374,27 @@ function updateSyncStatusUI(message){
   }
   info.textContent = message || (syncConnected ? `Synced live to code "${syncCode}" — changes on any connected device appear here within a couple of seconds.` : 'Not connected — this device\'s data stays local only.');
 }
+function parseFirebaseConfig_(raw){
+  let text = (raw||'').trim();
+  // strip a leading "const firebaseConfig = " / "var config = " etc. and a trailing semicolon, if the whole line was pasted
+  text = text.replace(/^\s*(const|let|var)\s+\w+\s*=\s*/,'').replace(/;\s*$/,'').trim();
+  // 1) try strict JSON first (works if they already quoted the keys)
+  try{ return JSON.parse(text); }catch(e){}
+  // 2) fall back to parsing it as a plain JS object literal (Firebase's own docs show it unquoted like this)
+  try{
+    const obj = Function('"use strict"; return (' + text + ')')();
+    if(obj && typeof obj === 'object') return obj;
+  }catch(e){}
+  return null;
+}
 async function connectSync(configText, code){
   configText = (configText||'').trim();
   code = (code||'').trim();
   if(!configText || !code){ toast('Paste your Firebase config and a sync code first'); return; }
-  let config;
-  try{ config = JSON.parse(configText); }
-  catch(e){ toast('That does not look like valid JSON — copy the exact config object from Firebase'); return; }
+  const config = parseFirebaseConfig_(configText);
+  if(!config || !config.apiKey || !config.projectId){
+    toast('Could not read that config — paste the exact object Firebase showed you, including the { } braces'); return;
+  }
   updateSyncStatusUI('Connecting…');
   try{
     await loadFirebaseSdk();
