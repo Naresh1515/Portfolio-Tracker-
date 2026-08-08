@@ -637,6 +637,51 @@ tbody tr:hover{ background:var(--panel-2); }
 
       <div class="panel">
         <div class="panel-head">
+          <div class="panel-title">Cloud Sync <span class="n">same dashboard on every device</span></div>
+          <span id="syncStatusBadge" class="badge sig-notrade">Not connected</span>
+        </div>
+        <div class="segmented" id="syncMethodToggle" style="margin-bottom:14px;">
+          <button type="button" class="active" data-method="sheets">Google Sheets (simpler)</button>
+          <button type="button" data-method="firebase">Firebase (faster sync)</button>
+        </div>
+
+        <div id="syncSheetsFields">
+          <div class="form-grid" style="grid-template-columns:2fr auto auto; align-items:end; margin-bottom:4px;">
+            <div><label>Apps Script Web App URL</label><input type="text" id="syncSheetsUrl" placeholder="https://script.google.com/macros/s/XXXXX/exec"></div>
+            <div><button class="btn primary" id="btnConnectSheetsSync" style="height:38px;">Connect</button></div>
+            <div><button class="btn ghost" id="btnDisconnectSync2" style="height:38px;">Disconnect</button></div>
+          </div>
+          <div style="margin-top:10px; font-size:11px; color:var(--text-faint); line-height:1.7;">
+            <b>One-time setup:</b> Open (or create) a Google Sheet → <b>Extensions → Apps Script</b> → delete any starter code and paste the script I gave you → <b>Deploy → New deployment → type: Web app</b> → Execute as <b>Me</b>, Who has access: <b>Anyone</b> → Deploy → copy the URL ending in <code>/exec</code> → paste it above → Connect. Do this once per device, using the exact same URL each time.<br>
+            Checks for updates every ~8 seconds — not instant like Firebase, but simple and lives entirely inside your own Google account.<br>
+            <b>Security note:</b> "Anyone with the link" can read/write this data — fine for personal use, just don't share the URL.
+          </div>
+        </div>
+
+        <div id="syncFirebaseFields" class="hidden">
+          <div class="form-grid" style="grid-template-columns:1fr; margin-bottom:8px;">
+            <div>
+              <label>Firebase config (paste the whole object from Firebase Console → Project settings → Your apps)</label>
+              <textarea id="syncConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' style="min-height:70px; font-family:var(--font-mono); font-size:11px;"></textarea>
+            </div>
+          </div>
+          <div class="form-grid" style="grid-template-columns:2fr auto auto; align-items:end; margin-bottom:4px;">
+            <div><label>Sync code (same code on every device you want linked)</label><input type="text" id="syncCodeInput" placeholder="e.g. my-portfolio-7k2"></div>
+            <div><button class="btn primary" id="btnConnectSync" style="height:38px;">Connect</button></div>
+            <div><button class="btn ghost" id="btnDisconnectSync" style="height:38px;">Disconnect</button></div>
+          </div>
+          <div style="margin-top:10px; font-size:11px; color:var(--text-faint); line-height:1.7;">
+            <b>One-time setup:</b> console.firebase.google.com → Add project → Databases &amp; Storage → Firestore → Create database → Start in test mode → Enable. Then ⚙ Project settings → Your apps → <code>&lt;/&gt;</code> Web → register an app → copy the config object shown and paste it above.
+          </div>
+        </div>
+
+        <div id="syncInfo" style="margin-top:10px; font-size:11px; color:var(--text-faint);">
+          Not connected — this device's data stays local only.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
           <div class="panel-title">Live Data Feed <span class="n">via a published Google Sheet using GOOGLEFINANCE</span></div>
           <span id="feedStatusBadge" class="badge sig-notrade">Not connected</span>
         </div>
@@ -754,10 +799,11 @@ const STORE_KEY = 'ledger_terminal_v1';
 function saveState(){
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl,
+      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
+  if(syncConnected && !syncApplyingRemote) schedulePush();
 }
 function loadState(){
   try{
@@ -851,6 +897,19 @@ let liveFeedUrl = (saved && saved.liveFeedUrl) || '';
 let liveFeedCache = {}; // symbol (uppercase) -> last fetched real price
 let liveFeedStatus = { ok:false, message:'Not connected', lastSync:null };
 let liveFeedInFlight = false;
+
+// Cloud sync (Firebase) — keeps trades/positions/opportunities/strategies mirrored across devices
+let syncConfigRaw = (saved && saved.syncConfigRaw) || '';
+let syncCode = (saved && saved.syncCode) || '';
+let syncMethod = (saved && saved.syncMethod) || 'sheets'; // 'sheets' | 'firebase'
+let syncSheetsUrl = (saved && saved.syncSheetsUrl) || '';
+let syncSheetsPollTimer = null;
+let syncSheetsLastUpdatedAt = 0;
+let syncConnected = false;
+let syncApplyingRemote = false;
+let syncPushTimer = null;
+let syncDocRef = null;
+let syncFirebaseUnsub = null;
 
 if(saved && saved.theme) document.body.setAttribute('data-theme', saved.theme);
 if(saved && saved.accent) document.body.setAttribute('data-accent', saved.accent);
@@ -1286,6 +1345,192 @@ function checkPositionAlerts(){
     p.lastSignal = signal;
   });
 }
+
+/* ================= CLOUD SYNC (Firebase Firestore) ================= */
+let firebaseSdkLoaded = false;
+function loadFirebaseSdk(){
+  if(firebaseSdkLoaded && window.firebase) return Promise.resolve();
+  return new Promise((resolve, reject)=>{
+    const s1 = document.createElement('script');
+    s1.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
+    s1.onload = ()=>{
+      const s2 = document.createElement('script');
+      s2.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js';
+      s2.onload = ()=>{ firebaseSdkLoaded = true; resolve(); };
+      s2.onerror = ()=>reject(new Error('Could not load Firestore SDK — check your internet connection'));
+      document.head.appendChild(s2);
+    };
+    s1.onerror = ()=>reject(new Error('Could not load Firebase SDK — check your internet connection'));
+    document.head.appendChild(s1);
+  });
+}
+function updateSyncStatusUI(message){
+  const badge = document.getElementById('syncStatusBadge');
+  const info = document.getElementById('syncInfo');
+  if(syncConnected){
+    badge.textContent = 'Connected'; badge.className = 'badge sig-buy';
+  } else {
+    badge.textContent = 'Not connected'; badge.className = 'badge sig-notrade';
+  }
+  info.textContent = message || (syncConnected ? `Synced live to code "${syncCode}" — changes on any connected device appear here within a couple of seconds.` : 'Not connected — this device\'s data stays local only.');
+}
+async function connectSync(configText, code){
+  configText = (configText||'').trim();
+  code = (code||'').trim();
+  if(!configText || !code){ toast('Paste your Firebase config and a sync code first'); return; }
+  let config;
+  try{ config = JSON.parse(configText); }
+  catch(e){ toast('That does not look like valid JSON — copy the exact config object from Firebase'); return; }
+  updateSyncStatusUI('Connecting…');
+  try{
+    await loadFirebaseSdk();
+    if(!firebase.apps || !firebase.apps.length){ firebase.initializeApp(config); }
+    const db = firebase.firestore();
+    syncDocRef = db.collection('ledger_terminal_sync').doc(code);
+    // pull once immediately, then merge local data up if the room is empty
+    const snap = await syncDocRef.get();
+    if(snap.exists){
+      applyRemoteData(snap.data());
+    } else {
+      await syncDocRef.set(buildSyncPayload());
+    }
+    syncFirebaseUnsub = syncDocRef.onSnapshot(doc=>{
+      if(doc.exists) applyRemoteData(doc.data());
+    }, err=>{
+      updateSyncStatusUI('Sync error: '+err.message);
+    });
+    syncConnected = true;
+    syncMethod = 'firebase';
+    syncConfigRaw = configText; syncCode = code;
+    saveState();
+    updateSyncStatusUI();
+    toast('Cloud sync connected');
+  }catch(e){
+    syncConnected = false;
+    updateSyncStatusUI('Connection failed: '+e.message);
+    toast('Could not connect: '+e.message);
+  }
+}
+function disconnectSync(){
+  syncConnected = false;
+  if(syncFirebaseUnsub){ syncFirebaseUnsub(); syncFirebaseUnsub = null; }
+  syncDocRef = null;
+  clearInterval(syncSheetsPollTimer); syncSheetsPollTimer = null;
+  syncConfigRaw = ''; syncCode = ''; syncSheetsUrl = '';
+  document.getElementById('syncConfigInput').value = '';
+  document.getElementById('syncCodeInput').value = '';
+  document.getElementById('syncSheetsUrl').value = '';
+  saveState();
+  updateSyncStatusUI();
+  toast('Cloud sync disconnected — this device now stays local only');
+}
+function buildSyncPayload(){
+  return { trades, openPositions, opportunities, strategies, brokerConfigs, liveFeedUrl, updatedAt: Date.now() };
+}
+function schedulePush(){
+  clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(()=>{
+    if(!syncConnected) return;
+    if(syncMethod==='firebase' && syncDocRef){
+      syncDocRef.set(buildSyncPayload()).catch(e=>{ updateSyncStatusUI('Push failed: '+e.message); });
+    } else if(syncMethod==='sheets' && syncSheetsUrl){
+      pushToSheets().catch(e=>{ updateSyncStatusUI('Push failed: '+e.message); });
+    }
+  }, 1200);
+}
+function applyRemoteData(data){
+  if(!data) return;
+  syncApplyingRemote = true;
+  if(data.trades) trades = data.trades;
+  if(data.openPositions) openPositions = data.openPositions;
+  if(data.opportunities) opportunities = data.opportunities;
+  if(data.strategies) strategies = data.strategies;
+  if(data.brokerConfigs) brokerConfigs = data.brokerConfigs;
+  if(data.liveFeedUrl!=null) liveFeedUrl = data.liveFeedUrl;
+  populateStrategySelects(); populateBrokerSelects(); renderBrokerConfig();
+  document.getElementById('feedUrlInput').value = liveFeedUrl;
+  populateMonthSelect();
+  renderAll();
+  saveState(); // cache locally too, but saveState will skip re-pushing since syncApplyingRemote is true
+  syncApplyingRemote = false;
+  updateSyncStatusUI();
+}
+document.getElementById('btnConnectSync').addEventListener('click', ()=>{
+  connectSync(document.getElementById('syncConfigInput').value, document.getElementById('syncCodeInput').value);
+});
+document.getElementById('btnDisconnectSync').addEventListener('click', ()=>{
+  if(!confirm('Disconnect cloud sync? This device keeps its current data locally, but will stop mirroring other devices.')) return;
+  disconnectSync();
+});
+
+/* ---- Google Sheets (Apps Script) sync backend ---- */
+async function pushToSheets(){
+  if(!syncSheetsUrl) return;
+  const payload = buildSyncPayload();
+  await fetch(syncSheetsUrl, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'}, // avoids CORS preflight, which Apps Script doesn't handle
+    body: JSON.stringify(payload)
+  });
+  syncSheetsLastUpdatedAt = payload.updatedAt;
+}
+async function pullFromSheets(force){
+  if(!syncSheetsUrl) return;
+  const res = await fetch(syncSheetsUrl + (syncSheetsUrl.includes('?') ? '&' : '?') + 'cachebust=' + Date.now());
+  const text = await res.text();
+  let data;
+  try{ data = JSON.parse(text); }catch(e){ throw new Error('Sheet returned invalid data — check the Apps Script deployment'); }
+  if(force || (data.updatedAt && data.updatedAt !== syncSheetsLastUpdatedAt)){
+    syncSheetsLastUpdatedAt = data.updatedAt || Date.now();
+    applyRemoteData(data);
+  }
+  return data;
+}
+function startSheetsPolling(){
+  clearInterval(syncSheetsPollTimer);
+  syncSheetsPollTimer = setInterval(()=>{
+    pullFromSheets(false).catch(e=>{ updateSyncStatusUI('Sync check failed: '+e.message); });
+  }, 8000);
+}
+async function connectSheetsSync(url){
+  url = (url||'').trim();
+  if(!url){ toast('Paste your Apps Script Web App URL first'); return; }
+  updateSyncStatusUI('Connecting…');
+  try{
+    const data = await pullFromSheets(true).catch(()=>null);
+    if(!data || (!data.trades && !data.openPositions)){
+      // empty sheet — seed it with this device's current data
+      syncSheetsUrl = url;
+      await pushToSheets();
+    } else {
+      syncSheetsUrl = url;
+    }
+    syncMethod = 'sheets'; syncConnected = true;
+    saveState();
+    startSheetsPolling();
+    updateSyncStatusUI();
+    toast('Connected to Google Sheets sync');
+  }catch(e){
+    syncConnected = false;
+    updateSyncStatusUI('Connection failed: '+e.message);
+    toast('Could not connect: '+e.message+' — check the URL and that the deployment access is set to "Anyone"');
+  }
+}
+document.getElementById('btnConnectSheetsSync').addEventListener('click', ()=>{
+  connectSheetsSync(document.getElementById('syncSheetsUrl').value);
+});
+document.getElementById('btnDisconnectSync2').addEventListener('click', ()=>{
+  if(!confirm('Disconnect cloud sync? This device keeps its current data locally, but will stop mirroring other devices.')) return;
+  disconnectSync();
+});
+document.getElementById('syncMethodToggle').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#syncMethodToggle button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  const method = e.target.dataset.method;
+  document.getElementById('syncSheetsFields').classList.toggle('hidden', method!=='sheets');
+  document.getElementById('syncFirebaseFields').classList.toggle('hidden', method!=='firebase');
+});
 
 /* ================= LIVE DATA FEED (Google Sheets GOOGLEFINANCE bridge) ================= */
 function parseFeedCsv(text){
@@ -1963,6 +2208,15 @@ openPositions.forEach(p=>{ if(p.lastSignal===undefined) p.lastSignal = positionS
 document.getElementById('feedUrlInput').value = liveFeedUrl;
 updateFeedStatusUI();
 if(liveFeedUrl) fetchLiveFeed(false);
+document.getElementById('syncConfigInput').value = syncConfigRaw;
+document.getElementById('syncCodeInput').value = syncCode;
+document.getElementById('syncSheetsUrl').value = syncSheetsUrl;
+document.querySelectorAll('#syncMethodToggle button').forEach(b=>b.classList.toggle('active', b.dataset.method===syncMethod));
+document.getElementById('syncSheetsFields').classList.toggle('hidden', syncMethod!=='sheets');
+document.getElementById('syncFirebaseFields').classList.toggle('hidden', syncMethod!=='firebase');
+updateSyncStatusUI();
+if(syncMethod==='sheets' && syncSheetsUrl) connectSheetsSync(syncSheetsUrl);
+else if(syncMethod==='firebase' && syncConfigRaw && syncCode) connectSync(syncConfigRaw, syncCode);
 renderTicker();
 renderAll();
 
