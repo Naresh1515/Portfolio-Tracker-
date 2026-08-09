@@ -2144,6 +2144,23 @@ uploadDrop.addEventListener('drop', e=>{
 });
 fileInput.addEventListener('change', e=>{ if(e.target.files.length) handleFile(e.target.files[0]); });
 
+function findHeaderRow_(ws){
+  // scan the first 20 rows for the one that actually looks like column headers —
+  // broker exports (Dhan, Zerodha, etc.) often have title/blank rows before the real header
+  const grid = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', range:0, blankrows:true});
+  const keywords = ['scrip','symbol','date','side','qty','quantity','buy','sell','price','stock'];
+  for(let i=0;i<Math.min(20, grid.length);i++){
+    const row = grid[i].map(c=>c.toString().trim().toLowerCase());
+    const hits = row.filter(c=> keywords.some(k=>c.includes(k))).length;
+    if(hits>=2) return i;
+  }
+  return 0;
+}
+function ensureBroker_(name){
+  if(!brokerConfigs.some(b=>b.name.toLowerCase()===name.toLowerCase())){
+    brokerConfigs.push({name, brokeragePerOrder:20, otherPct:0.06});
+  }
+}
 function handleFile(file){
   const status = document.getElementById('uploadStatus');
   status.textContent = 'Reading '+file.name+'...';
@@ -2152,41 +2169,89 @@ function handleFile(file){
     try{
       const wb = XLSX.read(e.target.result, {type:'binary', cellDates:true});
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
-      let imported = 0;
-      rows.forEach(row=>{
-        const norm = {};
-        Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/\s+/g,'_')] = row[k]);
-        const symbol = norm.symbol || norm.scrip || norm.stock;
-        if(!symbol) return;
-        let date = norm.date || norm.trade_date;
-        if(date instanceof Date) date = date.toISOString().slice(0,10);
-        else if(typeof date === 'number') date = new Date(Math.round((date-25569)*86400*1000)).toISOString().slice(0,10);
-        else date = (date || new Date().toISOString().slice(0,10)).toString().slice(0,10);
-        const qty = +(norm.quantity || norm.qty || 1);
-        const entry = +(norm.price || norm.entry_price || norm.buy_price || 0);
-        const exit = (norm.exit_price || norm.sell_price) ? +(norm.exit_price || norm.sell_price) : null;
-        const side = (norm.side || norm.type || 'BUY').toString().toUpperCase().includes('SELL') ? 'SELL' : 'BUY';
-        const product = (norm.product || '').toString().toLowerCase().includes('carry') ? 'carryforward' : (norm.product||'').toString().toLowerCase().includes('intra') ? 'intraday' : 'intraday';
-        let stratMatch = strategies.find(s=>s.name.toLowerCase() === (norm.strategy||'').toString().toLowerCase());
-        if(!stratMatch && norm.strategy){ stratMatch = {id:'s'+Date.now()+imported, name: norm.strategy.toString(), color: STRAT_COLORS[strategies.length % STRAT_COLORS.length]}; strategies.push(stratMatch); }
-        let brokerName = (norm.broker || 'Unspecified').toString().trim() || 'Unspecified';
-        if(!brokerConfigs.some(b=>b.name.toLowerCase()===brokerName.toLowerCase())){
-          brokerConfigs.push({name:brokerName, brokeragePerOrder:20, otherPct:0.06});
-        }
-        const importedTrade = {
-          id:'imp'+Date.now()+imported, date, symbol: symbol.toString().toUpperCase(), side, product,
-          qty, entry, exit, strategyId: stratMatch ? stratMatch.id : strategies[0].id, broker: brokerName, charges: 0,
-          notes: norm.notes || 'Imported from broker statement'
-        };
-        importedTrade.charges = importedTrade.exit!=null ? chargesFor(importedTrade) : 0;
-        trades.push(importedTrade);
-        imported++;
-      });
-      status.innerHTML = `✅ Imported <b>${imported}</b> trades from ${file.name}`;
-      toast(`${imported} trades imported`);
+      const headerRow = findHeaderRow_(ws);
+      const rows = XLSX.utils.sheet_to_json(ws, {defval:'', range:headerRow});
+      if(!rows.length){ status.textContent = '⚠ No data rows found after the header row.'; return; }
+
+      // normalize keys once to detect which broker format this is
+      const sampleNorm = {};
+      Object.keys(rows[0]).forEach(k=> sampleNorm[k.toString().trim().toLowerCase().replace(/[.\s]+/g,'_').replace(/_+$/,'')] = true);
+      const isDhanPnL = ('scrip_name' in sampleNorm) && ('buy_qty' in sampleNorm || 'sell_qty' in sampleNorm);
+
+      let importedTrades = 0, importedPositions = 0;
+      const brokerName = 'Dhan';
+
+      if(isDhanPnL){
+        ensureBroker_(brokerName);
+        rows.forEach((row, idx)=>{
+          const norm = {};
+          Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/[.\s]+/g,'_').replace(/_+$/,'')] = row[k]);
+          const symbol = (norm.scrip_name||'').toString().trim();
+          if(!symbol) return;
+          const buyQty = +(norm.buy_qty||0), sellQty = +(norm.sell_qty||0);
+          const buyPrice = +(norm.avg_buy_price||0), sellPrice = +(norm.avg_sell_price||0);
+          const closingPrice = +(norm.closing_price||0);
+          if(buyQty<=0 && sellQty<=0) return;
+          const closedQty = Math.min(buyQty, sellQty);
+          const openQty = buyQty - sellQty; // positive = still holding a long position; negative would mean a short still open (rare for cash equity)
+
+          if(closedQty>0){
+            const t = {
+              id:'imp'+Date.now()+idx+'a', date:new Date().toISOString().slice(0,10), symbol:symbol.toUpperCase(),
+              side:'BUY', product:'intraday', qty:closedQty, entry:buyPrice, exit:sellPrice,
+              strategyId: strategies[0].id, broker:brokerName, charges:0,
+              notes:'Imported from Dhan P&L statement (closed quantity)'
+            };
+            t.charges = chargesFor(t);
+            trades.push(t);
+            importedTrades++;
+          }
+          if(openQty>0){
+            openPositions.push({
+              id:'p'+Date.now()+idx, symbol:symbol.toUpperCase(), product:'carryforward', side:'BUY',
+              qty:openQty, avg:buyPrice, ltp: closingPrice>0 ? closingPrice : buyPrice,
+              strategyId: strategies[0].id, broker:brokerName
+            });
+            importedPositions++;
+          }
+        });
+        status.innerHTML = `✅ Detected Dhan P&L format — imported <b>${importedTrades}</b> closed trade(s) and <b>${importedPositions}</b> open position(s) from ${file.name}`;
+        toast(`${importedTrades} trades + ${importedPositions} positions imported from Dhan`);
+      } else {
+        // generic per-transaction format: date, symbol, side, quantity, price, exit_price, product, strategy, broker, notes
+        rows.forEach(row=>{
+          const norm = {};
+          Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/\s+/g,'_')] = row[k]);
+          const symbol = norm.symbol || norm.scrip || norm.scrip_name || norm.stock;
+          if(!symbol) return;
+          let date = norm.date || norm.trade_date;
+          if(date instanceof Date) date = date.toISOString().slice(0,10);
+          else if(typeof date === 'number') date = new Date(Math.round((date-25569)*86400*1000)).toISOString().slice(0,10);
+          else date = (date || new Date().toISOString().slice(0,10)).toString().slice(0,10);
+          const qty = +(norm.quantity || norm.qty || 1);
+          const entry = +(norm.price || norm.entry_price || norm.buy_price || 0);
+          const exit = (norm.exit_price || norm.sell_price) ? +(norm.exit_price || norm.sell_price) : null;
+          const side = (norm.side || norm.type || 'BUY').toString().toUpperCase().includes('SELL') ? 'SELL' : 'BUY';
+          const product = (norm.product || '').toString().toLowerCase().includes('carry') ? 'carryforward' : 'intraday';
+          let stratMatch = strategies.find(s=>s.name.toLowerCase() === (norm.strategy||'').toString().toLowerCase());
+          if(!stratMatch && norm.strategy){ stratMatch = {id:'s'+Date.now()+importedTrades, name: norm.strategy.toString(), color: STRAT_COLORS[strategies.length % STRAT_COLORS.length]}; strategies.push(stratMatch); }
+          let rowBroker = (norm.broker || 'Unspecified').toString().trim() || 'Unspecified';
+          ensureBroker_(rowBroker);
+          const importedTrade = {
+            id:'imp'+Date.now()+importedTrades, date, symbol: symbol.toString().toUpperCase(), side, product,
+            qty, entry, exit, strategyId: stratMatch ? stratMatch.id : strategies[0].id, broker: rowBroker, charges: 0,
+            notes: norm.notes || 'Imported from broker statement'
+          };
+          importedTrade.charges = importedTrade.exit!=null ? chargesFor(importedTrade) : 0;
+          trades.push(importedTrade);
+          importedTrades++;
+        });
+        status.innerHTML = `✅ Imported <b>${importedTrades}</b> trades from ${file.name}`;
+        toast(`${importedTrades} trades imported`);
+      }
+
       saveState();
-      populateStrategySelects(); populateMonthSelect(); renderAll();
+      populateStrategySelects(); populateBrokerSelects(); renderBrokerConfig(); populateMonthSelect(); renderAll();
     }catch(err){
       status.textContent = '⚠ Could not parse file: '+err.message;
     }
