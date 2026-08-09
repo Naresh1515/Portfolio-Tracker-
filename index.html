@@ -715,16 +715,22 @@ tbody tr:hover{ background:var(--panel-2); }
 
       <div class="grid-2">
         <div class="panel">
-          <div class="panel-title" style="margin-bottom:12px;">Import Broker Statement</div>
+          <div class="panel-head">
+            <div class="panel-title">Import Broker Statement</div>
+            <button class="btn ghost" id="btnClearTradeData" style="font-size:11px; padding:6px 10px; color:var(--loss);">Clear all trades &amp; positions</button>
+          </div>
+          <label style="display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--text-dim); margin-bottom:10px; cursor:pointer;">
+            <input type="checkbox" id="clearBeforeImport" checked style="width:auto;"> Clear existing trades &amp; positions before this import (avoids duplicates on re-upload)
+          </label>
           <div class="upload-drop" id="uploadDrop">
             <div class="ico">⇪</div>
             <div class="t">Drop your Excel / CSV file here, or click to browse</div>
-            <div class="s">Supports .xlsx, .xls, .csv broker P&amp;L exports</div>
+            <div class="s">Supports .xlsx, .xls, .csv — auto-detects Dhan P&amp;L, Dhan Global Transaction Report, or a generic per-trade format</div>
           </div>
           <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
           <div id="uploadStatus" style="margin-top:12px; font-size:12px; color:var(--text-dim);"></div>
           <div style="margin-top:14px; font-size:11.5px; color:var(--text-faint); line-height:1.6;">
-            Expected columns (any order): <b>date, symbol, side, quantity, price, exit_price, product, strategy, broker, notes</b>. Unrecognized columns are ignored — mapping is best-effort.
+            Generic format columns (any order): <b>date, symbol, side, quantity, price, exit_price, product, strategy, broker, notes</b>. Unrecognized columns are ignored — mapping is best-effort.
           </div>
         </div>
         <div class="panel">
@@ -2142,7 +2148,18 @@ uploadDrop.addEventListener('drop', e=>{
   e.preventDefault(); uploadDrop.style.borderColor='';
   if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', e=>{ if(e.target.files.length) handleFile(e.target.files[0]); });
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+  e.target.value = ''; // allow re-selecting the exact same file again (browsers otherwise skip the change event)
+});
+document.getElementById('btnClearTradeData').addEventListener('click', ()=>{
+  if(!confirm('This permanently clears all trades, open positions, and opportunities from this device (and any connected cloud sync). Strategies, brokers, and settings stay intact. Continue?')) return;
+  trades = []; openPositions = []; opportunities = [];
+  saveState();
+  populateMonthSelect(); renderAll();
+  document.getElementById('uploadStatus').textContent = 'Cleared all trades, positions, and opportunities.';
+  toast('All trade data cleared');
+});
 
 function findHeaderRow_(ws){
   // scan the first 20 rows for the one that actually looks like column headers —
@@ -2173,15 +2190,91 @@ function handleFile(file){
       const rows = XLSX.utils.sheet_to_json(ws, {defval:'', range:headerRow});
       if(!rows.length){ status.textContent = '⚠ No data rows found after the header row.'; return; }
 
+      if(document.getElementById('clearBeforeImport').checked){
+        trades = []; openPositions = []; opportunities = [];
+      }
+
       // normalize keys once to detect which broker format this is
       const sampleNorm = {};
       Object.keys(rows[0]).forEach(k=> sampleNorm[k.toString().trim().toLowerCase().replace(/[.\s]+/g,'_').replace(/_+$/,'')] = true);
-      const isDhanPnL = ('scrip_name' in sampleNorm) && ('buy_qty' in sampleNorm || 'sell_qty' in sampleNorm);
+      const isDhanGlobalTxn = ('scrip_name' in sampleNorm) && ('entry_price' in sampleNorm) && ('brokerage' in sampleNorm);
+      const isDhanPnL = !isDhanGlobalTxn && ('scrip_name' in sampleNorm) && ('buy_qty' in sampleNorm || 'sell_qty' in sampleNorm);
 
       let importedTrades = 0, importedPositions = 0;
       const brokerName = 'Dhan';
 
-      if(isDhanPnL){
+      if(isDhanGlobalTxn){
+        ensureBroker_(brokerName);
+        function parseDhanDate_(raw){
+          if(!raw) return new Date().toISOString().slice(0,10);
+          if(raw instanceof Date) return raw.toISOString().slice(0,10);
+          const s = raw.toString().trim();
+          const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/); // DD-MM-YYYY...
+          if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+          const d = new Date(s);
+          return isNaN(d) ? new Date().toISOString().slice(0,10) : d.toISOString().slice(0,10);
+        }
+        rows.forEach((row, idx)=>{
+          const norm = {};
+          Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/[.\s]+/g,'_').replace(/_+$/,'')] = row[k]);
+          const symbol = (norm.scrip_name||'').toString().trim();
+          if(!symbol) return; // skips blank rows and the trailer/summary/note rows, which have no scrip name
+          const date = parseDhanDate_(norm.date);
+          const buyQty = +(norm.buy_qty||0), sellQty = +(norm.sell_qty||0);
+          const entryPrice = +(norm.entry_price||0), exitPrice = +(norm.exit_price||0);
+          const totalCharges = +(
+            (+(norm.brokerage||0)) + (+(norm.gst||0)) + (+(norm.stt||0)) +
+            (+(norm.sebi_fees||0)) + (+(norm.stamp_duty||0)) + (+(norm.txn_charges||0)) + (+(norm.oth_charges||0))
+          ).toFixed(2);
+          if(buyQty<=0 && sellQty<=0) return;
+          const symU = symbol.toUpperCase();
+
+          if(buyQty>0 && sellQty>0){
+            // same-bill buy+sell — a same-day closed trade with real dates and real charges from the file
+            trades.push({
+              id:'imp'+Date.now()+idx+'x', date, symbol:symU, side:'BUY', product:'intraday',
+              qty:buyQty, entry:entryPrice, exit:exitPrice, strategyId:strategies[0].id, broker:brokerName,
+              charges:totalCharges, notes:'Imported from Dhan Global Transaction Report'
+            });
+            importedTrades++;
+          } else if(buyQty>0){
+            // pure buy fill — add to an existing open position for this symbol/broker, or create a new one
+            let pos = openPositions.find(p=>p.symbol===symU && p.broker===brokerName && p.side==='BUY');
+            if(pos){
+              const newQty = pos.qty + buyQty;
+              pos.avg = +(((pos.avg*pos.qty) + (entryPrice*buyQty)) / newQty).toFixed(4);
+              pos.qty = newQty;
+            } else {
+              openPositions.push({
+                id:'p'+Date.now()+idx, symbol:symU, product:'carryforward', side:'BUY',
+                qty:buyQty, avg:entryPrice, ltp:entryPrice, strategyId:strategies[0].id, broker:brokerName
+              });
+              importedPositions++;
+            }
+          } else if(sellQty>0){
+            // pure sell fill — closes/reduces an existing open position (if we can find one), producing a real closed trade
+            let pos = openPositions.find(p=>p.symbol===symU && p.broker===brokerName && p.side==='BUY');
+            let entryForTrade, product = 'carryforward', note = 'Imported from Dhan Global Transaction Report';
+            if(pos){
+              entryForTrade = pos.avg;
+              product = pos.product;
+              if(pos.qty > sellQty){ pos.qty -= sellQty; }
+              else { openPositions = openPositions.filter(p=>p!==pos); }
+            } else {
+              entryForTrade = exitPrice; // no record of the original buy (opened before this report's date range) — flagged in notes
+              note = 'Imported from Dhan Global Transaction Report — entry price unknown, position was opened before this report\u2019s date range';
+            }
+            trades.push({
+              id:'imp'+Date.now()+idx+'s', date, symbol:symU, side:'BUY', product,
+              qty:sellQty, entry:entryForTrade, exit:exitPrice, strategyId:strategies[0].id, broker:brokerName,
+              charges:totalCharges, notes:note
+            });
+            importedTrades++;
+          }
+        });
+        status.innerHTML = `✅ Detected Dhan Global Transaction Report — imported <b>${importedTrades}</b> closed trade(s) with real dates &amp; charges, and <b>${importedPositions}</b> new open position(s), from ${file.name}`;
+        toast(`${importedTrades} trades + ${importedPositions} positions imported from Dhan`);
+      } else if(isDhanPnL){
         ensureBroker_(brokerName);
         rows.forEach((row, idx)=>{
           const norm = {};
