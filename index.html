@@ -479,6 +479,7 @@ tbody tr:hover{ background:var(--panel-2); }
           <div><label>Product</label><select id="pProduct"><option value="intraday">Intraday</option><option value="carryforward">Carryforward</option></select></div>
           <div><label>Quantity</label><input type="number" id="pQty" placeholder="100"></div>
           <div><label>Entry / Avg Price</label><input type="number" id="pAvg" placeholder="2450.00" step="0.05"></div>
+          <div><label>Entry Date</label><input type="date" id="pEntryDate"></div>
           <div><label>Strategy</label><select id="pStrategy"></select></div>
           <div><label>Broker</label><select id="pBroker"></select></div>
           <div><label>Stop Loss (optional)</label><input type="number" id="pStopLoss" placeholder="—" step="0.05"></div>
@@ -493,7 +494,7 @@ tbody tr:hover{ background:var(--panel-2); }
         <div style="overflow-x:auto;">
         <table>
           <thead><tr>
-            <th>Symbol</th><th>Type</th><th>Side</th><th>Qty</th><th>Avg Price</th><th>LTP</th><th>Chg%</th><th>Unrealized P&amp;L</th><th>Stop Loss</th><th>Target</th><th>Signal</th><th>Strategy</th><th>Broker</th><th></th>
+            <th>Symbol</th><th>Type</th><th>Side</th><th>Qty</th><th>Avg Price</th><th>Entry Date</th><th>Days</th><th>LTP</th><th>Chg%</th><th>Ann. ROI%</th><th>Unrealized P&amp;L</th><th>Stop Loss</th><th>Target</th><th>Signal</th><th>Strategy</th><th>Broker</th><th></th>
           </tr></thead>
           <tbody id="positionsBody"></tbody>
         </table>
@@ -588,7 +589,8 @@ tbody tr:hover{ background:var(--panel-2); }
       <div class="panel hidden" id="entryFormPanel">
         <div class="panel-title" style="margin-bottom:12px;">New Trade Entry</div>
         <div class="form-grid">
-          <div><label>Date</label><input type="date" id="fDate"></div>
+          <div><label>Entry Date</label><input type="date" id="fEntryDate"></div>
+          <div><label>Exit Date <span style="font-weight:400; color:var(--text-faint);">(blank if still open)</span></label><input type="date" id="fExitDate"></div>
           <div><label>Symbol</label><input type="text" id="fSymbol" placeholder="RELIANCE"></div>
           <div><label>Side</label><select id="fSide"><option>BUY</option><option>SELL</option></select></div>
           <div><label>Product</label><select id="fProduct"><option value="intraday">Intraday</option><option value="carryforward">Carryforward</option></select></div>
@@ -734,14 +736,22 @@ tbody tr:hover{ background:var(--panel-2); }
           </div>
         </div>
         <div class="panel">
-          <div class="panel-title" style="margin-bottom:12px;">Export Reports</div>
-          <div style="display:flex; flex-direction:column; gap:10px;">
-            <button class="btn" id="exportAllXlsx">↓ All trades — Excel (.xlsx)</button>
-            <button class="btn" id="exportMonthXlsx">↓ Selected month — Excel (.xlsx)</button>
-            <button class="btn" id="exportStrategyXlsx">↓ Strategy-wise summary — Excel (.xlsx)</button>
-            <button class="btn" id="exportBrokerXlsx">↓ Broker-wise summary — Excel (.xlsx)</button>
-            <button class="btn" id="exportCsv">↓ All trades — CSV</button>
+          <div class="panel-title" style="margin-bottom:12px;">Import History</div>
+          <div id="importHistoryList"></div>
+          <div style="margin-top:8px; font-size:11px; color:var(--text-faint); line-height:1.6;">
+            The Global Transaction Report format tracks each transaction's Bill No., so re-uploading an overlapping weekly export automatically skips rows already imported — safe to upload cumulatively. Uploaded the wrong file? Delete just that import below; everything else stays untouched. Positions built from multiple imports only lose the specific quantity that import contributed, not the whole position.
           </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title" style="margin-bottom:12px;">Export Reports</div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <button class="btn" id="exportAllXlsx">↓ All trades — Excel (.xlsx)</button>
+          <button class="btn" id="exportMonthXlsx">↓ Selected month — Excel (.xlsx)</button>
+          <button class="btn" id="exportStrategyXlsx">↓ Strategy-wise summary — Excel (.xlsx)</button>
+          <button class="btn" id="exportBrokerXlsx">↓ Broker-wise summary — Excel (.xlsx)</button>
+          <button class="btn" id="exportCsv">↓ All trades — CSV</button>
         </div>
       </div>
 
@@ -778,7 +788,7 @@ tbody tr:hover{ background:var(--panel-2); }
         </div>
         <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Date</th><th>Symbol</th><th>Side</th><th>Product</th><th>Strategy</th><th>Broker</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Charges</th><th>Net P&amp;L</th><th>Status</th></tr></thead>
+          <thead><tr><th>Entry Date</th><th>Exit Date</th><th>Days Held</th><th>Symbol</th><th>Side</th><th>Product</th><th>Strategy</th><th>Broker</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Charges</th><th>Net P&amp;L</th><th>Status</th></tr></thead>
           <tbody id="allTradesBody"></tbody>
         </table>
         </div>
@@ -821,7 +831,7 @@ function saveState(syncCloud){
   if(syncCloud===undefined) syncCloud = true; // default: real data changes DO sync; pass false for cosmetic/ephemeral updates like LTP ticks
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl, totalCapital,
+      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl, totalCapital, importBatches,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
@@ -880,8 +890,12 @@ function seedTrades(){
       const qty = [25,50,75,100,150,200][Math.floor(Math.random()*6)];
       const brokerNamesSeed = ['Zerodha','Upstox','Angel One','ICICI Direct','Groww'];
       const broker = brokerNamesSeed[Math.floor(Math.random()*brokerNamesSeed.length)];
+      const exitDateStr = date.toISOString().slice(0,10);
+      const entryGapDays = product==='intraday' ? 0 : Math.floor(Math.random()*12);
+      const entryDateObj = new Date(date.getTime() - entryGapDays*86400000);
+      const entryDateStr = entryDateObj.toISOString().slice(0,10);
       const tradeObj = {
-        id:'t'+(id++), date:date.toISOString().slice(0,10), symbol:sym, side,
+        id:'t'+(id++), date: isOpen ? entryDateStr : exitDateStr, entryDate:entryDateStr, exitDate: isOpen ? null : exitDateStr, symbol:sym, side,
         product, strategyId:strat.id, qty, entry, exit, broker, charges:0,
         notes: isOpen ? '' : ['Followed plan, exited at target.','Stopped out on reversal, discipline held.','Scaled in on pullback confirmation.','Exited early on volume spike.','Textbook breakout continuation.'][Math.floor(Math.random()*5)]
       };
@@ -894,11 +908,11 @@ function seedTrades(){
 let trades = (saved && saved.trades && saved.trades.length) ? saved.trades : seedTrades();
 
 let openPositions = (saved && saved.openPositions) ? saved.openPositions : [
-  {id:'p1', symbol:'RELIANCE', product:'carryforward', side:'BUY', qty:100, avg:2845.50, ltp:2871.20, strategyId:'s2', broker:'Zerodha'},
-  {id:'p2', symbol:'TCS', product:'intraday', side:'BUY', qty:60, avg:4102.00, ltp:4088.30, strategyId:'s1', broker:'Upstox'},
-  {id:'p3', symbol:'HDFCBANK', product:'carryforward', side:'BUY', qty:150, avg:1642.75, ltp:1659.90, strategyId:'s2', broker:'Zerodha'},
-  {id:'p4', symbol:'ICICIBANK', product:'intraday', side:'SELL', qty:200, avg:1198.40, ltp:1191.10, strategyId:'s3', broker:'Angel One'},
-  {id:'p5', symbol:'BAJFINANCE', product:'carryforward', side:'BUY', qty:20, avg:7210.00, ltp:7345.60, strategyId:'s4', broker:'Groww'},
+  {id:'p1', symbol:'RELIANCE', product:'carryforward', side:'BUY', qty:100, avg:2845.50, ltp:2871.20, strategyId:'s2', broker:'Zerodha', entryDate:'2026-07-14'},
+  {id:'p2', symbol:'TCS', product:'intraday', side:'BUY', qty:60, avg:4102.00, ltp:4088.30, strategyId:'s1', broker:'Upstox', entryDate:'2026-08-09'},
+  {id:'p3', symbol:'HDFCBANK', product:'carryforward', side:'BUY', qty:150, avg:1642.75, ltp:1659.90, strategyId:'s2', broker:'Zerodha', entryDate:'2026-06-30'},
+  {id:'p4', symbol:'ICICIBANK', product:'intraday', side:'SELL', qty:200, avg:1198.40, ltp:1191.10, strategyId:'s3', broker:'Angel One', entryDate:'2026-08-09'},
+  {id:'p5', symbol:'BAJFINANCE', product:'carryforward', side:'BUY', qty:20, avg:7210.00, ltp:7345.60, strategyId:'s4', broker:'Groww', entryDate:'2026-05-22'},
 ];
 
 let opportunities = (saved && saved.opportunities) ? saved.opportunities : [
@@ -920,6 +934,7 @@ let liveFeedCache = {}; // symbol (uppercase) -> last fetched real price
 let liveFeedStatus = { ok:false, message:'Not connected', lastSync:null };
 let liveFeedInFlight = false;
 let totalCapital = (saved && saved.totalCapital) || 100000; // used only when an opportunity's risk is set as a percentage
+let importBatches = (saved && saved.importBatches) || []; // [{id, filename, importedAt, format, tradeCount, positionCount, skippedDuplicates}]
 
 // Cloud sync (Firebase) — keeps trades/positions/opportunities/strategies mirrored across devices
 let syncConfigRaw = (saved && saved.syncConfigRaw) || '';
@@ -955,6 +970,24 @@ function chargesFor(trade){
   return +((cfg.brokeragePerOrder*2) + (turnover*cfg.otherPct/100)).toFixed(2);
 }
 function monthKey(dateStr){ return dateStr.slice(0,7); }
+function toLocalYMD_(d){
+  // avoids the classic UTC-shift bug: d.toISOString() converts to UTC, which can push a local
+  // midnight date back to the previous day in any timezone ahead of UTC (e.g. India, UTC+5:30)
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function daysBetween(startStr, endStr){
+  if(!startStr) return 0;
+  const start = new Date(startStr+'T00:00:00');
+  const end = new Date((endStr || toLocalYMD_(new Date()))+'T00:00:00');
+  return Math.max(0, Math.round((end-start)/86400000));
+}
+function annualizedRoiPct(returnPct, days){
+  if(days < 1) return null; // annualizing a same-day move isn't meaningful — show raw % instead
+  return returnPct / days * 365;
+}
 function toast(msg){
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('show');
@@ -1202,6 +1235,8 @@ function renderPositions(){
     const dir = p.side==='BUY'?1:-1;
     const pnl = (p.ltp - p.avg)*p.qty*dir;
     const chg = ((p.ltp-p.avg)/p.avg*100*dir);
+    const days = daysBetween(p.entryDate, null);
+    const annRoi = annualizedRoiPct(chg, days);
     const signal = positionSignal(p);
     const sigClass = signal==='TARGET HIT' ? 'sig-buy' : signal==='SL HIT' ? 'sig-sell' : 'sig-notrade';
     return `<tr>
@@ -1210,8 +1245,11 @@ function renderPositions(){
       <td><span class="${p.side==='BUY'?'side-buy':'side-sell'}">${p.side}</span></td>
       <td>${p.qty}</td>
       <td>${fmt2(p.avg)}</td>
+      <td class="num" style="font-size:11.5px;">${p.entryDate || '—'}</td>
+      <td class="num">${p.entryDate ? days+'d' : '—'}</td>
       <td><span class="live-pulse"></span>${fmt2(p.ltp)}</td>
       <td class="${chg>=0?'pos':'neg'}">${chg>=0?'+':''}${chg.toFixed(2)}%</td>
+      <td class="${annRoi==null?'':(annRoi>=0?'pos':'neg')}">${annRoi==null?'—':(annRoi>=0?'+':'')+annRoi.toFixed(1)+'%'}</td>
       <td class="${pnlClass(pnl)}">${fmt(pnl)}</td>
       <td><input type="number" step="0.05" value="${p.stopLoss??''}" placeholder="—" style="width:80px; font-family:var(--font-mono); font-size:11.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text);" onchange="updatePositionLevel('${p.id}','stopLoss', this.value)"></td>
       <td><input type="number" step="0.05" value="${p.target??''}" placeholder="—" style="width:80px; font-family:var(--font-mono); font-size:11.5px; padding:5px 7px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text);" onchange="updatePositionLevel('${p.id}','target', this.value)"></td>
@@ -1220,7 +1258,7 @@ function renderPositions(){
       <td><select class="select" style="font-size:11px; padding:5px 7px;" onchange="updatePositionBroker('${p.id}', this.value)">${brokerOpts(p.broker)}</select></td>
       <td><button class="btn ghost" style="padding:5px 9px; font-size:11px;" onclick="closePosition('${p.id}')">Close</button></td>
     </tr>`;
-  }).join('') : `<tr><td colspan="14"><div class="empty-state">No open positions in this filter.</div></td></tr>`;
+  }).join('') : `<tr><td colspan="17"><div class="empty-state">No open positions in this filter.</div></td></tr>`;
 }
 window.updatePositionLevel = function(id, field, val){
   const p = openPositions.find(p=>p.id===id); if(!p) return;
@@ -1251,8 +1289,9 @@ window.closePosition = function(id){
   const cfg = brokerConfigFor(p.broker);
   const turnover = p.avg*p.qty + exitPrice*p.qty;
   const charges = +((cfg.brokeragePerOrder*2) + (turnover*cfg.otherPct/100)).toFixed(2);
+  const today = toLocalYMD_(new Date());
   const newTrade = {
-    id:'t'+Date.now(), date:new Date().toISOString().slice(0,10), symbol:p.symbol, side:p.side,
+    id:'t'+Date.now(), date:today, entryDate: p.entryDate || today, exitDate: today, symbol:p.symbol, side:p.side,
     product:p.product, strategyId:p.strategyId, qty:p.qty, entry:p.avg, exit:exitPrice,
     broker:p.broker, charges, notes:'Closed from Open Positions'
   };
@@ -1714,6 +1753,7 @@ setInterval(()=>{ if(liveFeedUrl) fetchLiveFeed(false); }, 20000);
 
 document.getElementById('btnAddPosition').addEventListener('click', ()=>{
   document.getElementById('posFormPanel').classList.remove('hidden');
+  document.getElementById('pEntryDate').value = toLocalYMD_(new Date());
 });
 document.getElementById('btnCancelPosition').addEventListener('click', ()=>{
   document.getElementById('posFormPanel').classList.add('hidden');
@@ -1744,7 +1784,7 @@ document.getElementById('btnSavePosition').addEventListener('click', ()=>{
   openPositions.push({
     id:'p'+Date.now(), symbol, product, side, qty, avg, ltp:avg,
     strategyId: document.getElementById('pStrategy').value, broker: document.getElementById('pBroker').value,
-    stopLoss, target
+    stopLoss, target, entryDate: document.getElementById('pEntryDate').value || toLocalYMD_(new Date())
   });
   ['pSymbol','pQty','pAvg','pStopLoss','pTarget'].forEach(id=>document.getElementById(id).value='');
   document.querySelectorAll('#pSideToggle button').forEach(b=>b.classList.toggle('active', b.dataset.side==='BUY'));
@@ -1850,7 +1890,8 @@ window.markOppAsTaken = function(id){
   const product = o.tradeType==='swing' ? 'carryforward' : 'intraday';
   openPositions.push({
     id:'p'+Date.now(), symbol:o.symbol, product, side:o.side, qty, avg:actualEntry, ltp:o.ltp,
-    strategyId:o.strategyId, broker:o.broker, target:o.target ?? null, stopLoss:o.stopLoss ?? null
+    strategyId:o.strategyId, broker:o.broker, target:o.target ?? null, stopLoss:o.stopLoss ?? null,
+    entryDate: toLocalYMD_(new Date())
   });
   opportunities = opportunities.filter(x=>x.id!==id);
   toast(`${o.symbol} moved to Open Positions (${qty} qty @ ${fmt2(actualEntry)})`);
@@ -1977,23 +2018,28 @@ document.getElementById('reportsBrokerFilter').addEventListener('change', render
 document.getElementById('reportsSideFilter').addEventListener('change', renderAllTradesTable);
 document.getElementById('btnNewEntry').addEventListener('click', ()=>{
   document.getElementById('entryFormPanel').classList.remove('hidden');
-  document.getElementById('fDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fEntryDate').value = toLocalYMD_(new Date());
 });
 document.getElementById('btnCancelEntry').addEventListener('click', ()=>{
   document.getElementById('entryFormPanel').classList.add('hidden');
 });
 document.getElementById('btnSaveEntry').addEventListener('click', ()=>{
-  const date = document.getElementById('fDate').value;
+  const entryDate = document.getElementById('fEntryDate').value;
+  const exitDateVal = document.getElementById('fExitDate').value;
   const symbol = document.getElementById('fSymbol').value.trim().toUpperCase();
-  if(!date || !symbol){ toast('Date and symbol are required'); return; }
+  if(!entryDate || !symbol){ toast('Entry date and symbol are required'); return; }
+  const exitPriceVal = document.getElementById('fExit').value ? +document.getElementById('fExit').value : null;
+  const resolvedExitDate = exitPriceVal!=null ? (exitDateVal || entryDate) : null;
   const t = {
     id:'t'+Date.now(),
-    date, symbol,
+    date: resolvedExitDate || entryDate, // date = closing date once closed (matches imports/calendar/monthly filters), else entry date while still open
+    entryDate, exitDate: resolvedExitDate,
+    symbol,
     side: document.getElementById('fSide').value,
     product: document.getElementById('fProduct').value,
     qty: +document.getElementById('fQty').value || 1,
     entry: +document.getElementById('fEntry').value || 0,
-    exit: document.getElementById('fExit').value ? +document.getElementById('fExit').value : null,
+    exit: exitPriceVal,
     strategyId: document.getElementById('fStrategy').value,
     broker: document.getElementById('fBroker').value,
     charges: 0,
@@ -2001,7 +2047,7 @@ document.getElementById('btnSaveEntry').addEventListener('click', ()=>{
   };
   t.charges = t.exit!=null ? chargesFor(t) : 0;
   trades.push(t);
-  ['fSymbol','fQty','fEntry','fExit','fNotes'].forEach(id=>document.getElementById(id).value='');
+  ['fSymbol','fQty','fEntry','fExit','fExitDate','fNotes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('entryFormPanel').classList.add('hidden');
   toast('Trade logged to journal');
   saveState();
@@ -2121,8 +2167,13 @@ function renderAllTradesTable(){
   const brokerOpts = b => brokerNames().map(n=>`<option value="${n}" ${n===b?'selected':''}>${n}</option>`).join('');
   document.getElementById('allTradesBody').innerHTML = list.length ? list.map(t=>{
     const pnl = tradePnl(t);
+    const entryDate = t.entryDate || t.date;
+    const exitDate = t.exit!=null ? (t.exitDate || t.date) : null;
+    const days = t.exit!=null ? daysBetween(entryDate, exitDate) : daysBetween(entryDate, null);
     return `<tr>
-      <td>${t.date}</td>
+      <td>${entryDate}</td>
+      <td>${exitDate || '—'}</td>
+      <td class="num">${days}d</td>
       <td class="name-cell">${t.symbol}</td>
       <td><span class="${t.side==='BUY'?'side-buy':'side-sell'}">${t.side}</span></td>
       <td><span class="badge ${t.product==='carryforward'?'cf':'intra'}">${t.product==='carryforward'?'CF':'Intraday'}</span></td>
@@ -2135,7 +2186,7 @@ function renderAllTradesTable(){
       <td class="${pnl==null?'':pnlClass(pnl)}">${pnl==null?'—':fmt(pnl)}</td>
       <td>${t.exit==null?'<span class="badge open">OPEN</span>':'Closed'}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="12"><div class="empty-state">No trades match this filter.</div></td></tr>`;
+  }).join('') : `<tr><td colspan="14"><div class="empty-state">No trades match this filter.</div></td></tr>`;
 }
 
 /* ================= FILE UPLOAD (broker statement) ================= */
@@ -2153,11 +2204,11 @@ fileInput.addEventListener('change', e=>{
   e.target.value = ''; // allow re-selecting the exact same file again (browsers otherwise skip the change event)
 });
 document.getElementById('btnClearTradeData').addEventListener('click', ()=>{
-  if(!confirm('This permanently clears all trades, open positions, and opportunities from this device (and any connected cloud sync). Strategies, brokers, and settings stay intact. Continue?')) return;
-  trades = []; openPositions = []; opportunities = [];
+  if(!confirm('This permanently clears all trades, open positions, opportunities, and import history from this device (and any connected cloud sync). Strategies, brokers, and settings stay intact. Continue?')) return;
+  trades = []; openPositions = []; opportunities = []; importBatches = [];
   saveState();
   populateMonthSelect(); renderAll();
-  document.getElementById('uploadStatus').textContent = 'Cleared all trades, positions, and opportunities.';
+  document.getElementById('uploadStatus').textContent = 'Cleared all trades, positions, opportunities, and import history.';
   toast('All trade data cleared');
 });
 
@@ -2178,6 +2229,48 @@ function ensureBroker_(name){
     brokerConfigs.push({name, brokeragePerOrder:20, otherPct:0.06});
   }
 }
+function renderImportHistory(){
+  const el = document.getElementById('importHistoryList');
+  if(!importBatches.length){
+    el.innerHTML = `<div class="empty-state" style="padding:20px;">No file imports yet.</div>`;
+    return;
+  }
+  el.innerHTML = [...importBatches].reverse().map(b=>`
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);">
+      <div>
+        <div style="font-weight:600; font-size:12.5px;">${b.filename}</div>
+        <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">
+          ${new Date(b.importedAt).toLocaleString()} · ${b.format} · ${b.tradeCount} trade(s), ${b.positionCount} position(s)${b.skippedDuplicates?`, ${b.skippedDuplicates} duplicate(s) skipped`:''}
+        </div>
+      </div>
+      <button class="btn ghost" style="padding:6px 10px; font-size:11px; color:var(--loss); flex-shrink:0;" onclick="deleteImportBatch('${b.id}')">Delete this import</button>
+    </div>`).join('');
+}
+window.deleteImportBatch = function(batchId){
+  const batch = importBatches.find(b=>b.id===batchId);
+  if(!batch) return;
+  if(!confirm(`Delete everything imported from "${batch.filename}"? Trades and position quantities added by this specific import will be removed. Data from other imports or entered manually stays untouched.`)) return;
+
+  trades = trades.filter(t=>t.importBatchId!==batchId);
+
+  openPositions = openPositions.map(p=>{
+    if(p.contributions && p.contributions.length){
+      if(!p.contributions.some(c=>c.batchId===batchId)) return p; // untouched by this batch
+      const remaining = p.contributions.filter(c=>c.batchId!==batchId);
+      if(!remaining.length) return null; // this position was built entirely by the deleted import
+      const totalQty = remaining.reduce((a,c)=>a+c.qty,0);
+      const totalCost = remaining.reduce((a,c)=>a+(c.qty*c.price),0);
+      return {...p, qty: totalQty, avg: +(totalCost/totalQty).toFixed(4), contributions: remaining};
+    }
+    // no fine-grained contribution tracking (e.g. Dhan P&L summary import) — remove entirely if this batch created it
+    return p.importBatchId===batchId ? null : p;
+  }).filter(p=>p!=null);
+
+  importBatches = importBatches.filter(b=>b.id!==batchId);
+  saveState();
+  populateMonthSelect(); renderAll();
+  toast(`Deleted import: ${batch.filename}`);
+};
 function handleFile(file){
   const status = document.getElementById('uploadStatus');
   status.textContent = 'Reading '+file.name+'...';
@@ -2191,8 +2284,11 @@ function handleFile(file){
       if(!rows.length){ status.textContent = '⚠ No data rows found after the header row.'; return; }
 
       if(document.getElementById('clearBeforeImport').checked){
-        trades = []; openPositions = []; opportunities = [];
+        trades = []; openPositions = []; opportunities = []; importBatches = [];
       }
+
+      const batchId = 'batch'+Date.now();
+      const batchStartTrades = trades.length;
 
       // normalize keys once to detect which broker format this is
       const sampleNorm = {};
@@ -2206,35 +2302,49 @@ function handleFile(file){
       if(isDhanGlobalTxn){
         ensureBroker_(brokerName);
         function parseDhanDate_(raw){
-          if(!raw) return new Date().toISOString().slice(0,10);
-          if(raw instanceof Date) return raw.toISOString().slice(0,10);
+          if(!raw) return toLocalYMD_(new Date());
+          if(raw instanceof Date) return toLocalYMD_(raw);
           const s = raw.toString().trim();
           const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/); // DD-MM-YYYY...
           if(m) return `${m[3]}-${m[2]}-${m[1]}`;
           const d = new Date(s);
-          return isNaN(d) ? new Date().toISOString().slice(0,10) : d.toISOString().slice(0,10);
+          return isNaN(d) ? toLocalYMD_(new Date()) : toLocalYMD_(d);
         }
+        let skippedDuplicates = 0;
+        // reconstruct a per-line-item key for everything already imported, so re-uploading an overlapping
+        // export skips only the exact same row — a single Bill No. can legitimately cover multiple scrips
+        const seenLineItems = new Set();
+        trades.forEach(t=>{ if(t.broker===brokerName && t.billNo) seenLineItems.add([t.billNo,t.symbol,t.qty,t.exit].join('|')); });
+        openPositions.forEach(p=>{ if(p.broker===brokerName && p.contributions) p.contributions.forEach(c=> c.billNo && seenLineItems.add([c.billNo,p.symbol,c.qty,c.price].join('|'))); });
+
         rows.forEach((row, idx)=>{
           const norm = {};
           Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/[.\s]+/g,'_').replace(/_+$/,'')] = row[k]);
           const symbol = (norm.scrip_name||'').toString().trim();
           if(!symbol) return; // skips blank rows and the trailer/summary/note rows, which have no scrip name
+          const billNo = (norm.bill_no||'').toString().trim();
           const date = parseDhanDate_(norm.date);
           const buyQty = +(norm.buy_qty||0), sellQty = +(norm.sell_qty||0);
           const entryPrice = +(norm.entry_price||0), exitPrice = +(norm.exit_price||0);
+          const symU = symbol.toUpperCase();
+          const lineQty = buyQty>0 ? buyQty : sellQty;
+          const linePrice = buyQty>0 && sellQty===0 ? entryPrice : exitPrice; // matches how the key is reconstructed above
+          const lineKey = billNo ? [billNo, symU, lineQty, linePrice].join('|') : null;
+          if(lineKey && seenLineItems.has(lineKey)){ skippedDuplicates++; return; } // already imported in a prior upload — skip to avoid double-counting
+          if(lineKey) seenLineItems.add(lineKey);
           const totalCharges = +(
             (+(norm.brokerage||0)) + (+(norm.gst||0)) + (+(norm.stt||0)) +
             (+(norm.sebi_fees||0)) + (+(norm.stamp_duty||0)) + (+(norm.txn_charges||0)) + (+(norm.oth_charges||0))
           ).toFixed(2);
           if(buyQty<=0 && sellQty<=0) return;
-          const symU = symbol.toUpperCase();
 
           if(buyQty>0 && sellQty>0){
             // same-bill buy+sell — a same-day closed trade with real dates and real charges from the file
             trades.push({
-              id:'imp'+Date.now()+idx+'x', date, symbol:symU, side:'BUY', product:'intraday',
+              id:'imp'+Date.now()+idx+'x', date, entryDate:date, exitDate:date, symbol:symU, side:'BUY', product:'intraday',
               qty:buyQty, entry:entryPrice, exit:exitPrice, strategyId:strategies[0].id, broker:brokerName,
-              charges:totalCharges, notes:'Imported from Dhan Global Transaction Report'
+              charges:totalCharges, notes:'Imported from Dhan Global Transaction Report',
+              billNo, importBatchId:batchId
             });
             importedTrades++;
           } else if(buyQty>0){
@@ -2244,36 +2354,43 @@ function handleFile(file){
               const newQty = pos.qty + buyQty;
               pos.avg = +(((pos.avg*pos.qty) + (entryPrice*buyQty)) / newQty).toFixed(4);
               pos.qty = newQty;
+              if(!pos.contributions) pos.contributions = [];
+              pos.contributions.push({batchId, billNo, qty:buyQty, price:entryPrice, date});
             } else {
               openPositions.push({
                 id:'p'+Date.now()+idx, symbol:symU, product:'carryforward', side:'BUY',
-                qty:buyQty, avg:entryPrice, ltp:entryPrice, strategyId:strategies[0].id, broker:brokerName
+                qty:buyQty, avg:entryPrice, ltp:entryPrice, strategyId:strategies[0].id, broker:brokerName,
+                entryDate: date, importBatchId:batchId,
+                contributions:[{batchId, billNo, qty:buyQty, price:entryPrice, date}]
               });
               importedPositions++;
             }
           } else if(sellQty>0){
             // pure sell fill — closes/reduces an existing open position (if we can find one), producing a real closed trade
             let pos = openPositions.find(p=>p.symbol===symU && p.broker===brokerName && p.side==='BUY');
-            let entryForTrade, product = 'carryforward', note = 'Imported from Dhan Global Transaction Report';
+            let entryForTrade, entryDateForTrade, product = 'carryforward', note = 'Imported from Dhan Global Transaction Report';
             if(pos){
               entryForTrade = pos.avg;
+              entryDateForTrade = pos.entryDate || date;
               product = pos.product;
               if(pos.qty > sellQty){ pos.qty -= sellQty; }
               else { openPositions = openPositions.filter(p=>p!==pos); }
             } else {
               entryForTrade = exitPrice; // no record of the original buy (opened before this report's date range) — flagged in notes
+              entryDateForTrade = date;
               note = 'Imported from Dhan Global Transaction Report — entry price unknown, position was opened before this report\u2019s date range';
             }
             trades.push({
-              id:'imp'+Date.now()+idx+'s', date, symbol:symU, side:'BUY', product,
+              id:'imp'+Date.now()+idx+'s', date, entryDate:entryDateForTrade, exitDate:date, symbol:symU, side:'BUY', product,
               qty:sellQty, entry:entryForTrade, exit:exitPrice, strategyId:strategies[0].id, broker:brokerName,
-              charges:totalCharges, notes:note
+              charges:totalCharges, notes:note, billNo, importBatchId:batchId
             });
             importedTrades++;
           }
         });
-        status.innerHTML = `✅ Detected Dhan Global Transaction Report — imported <b>${importedTrades}</b> closed trade(s) with real dates &amp; charges, and <b>${importedPositions}</b> new open position(s), from ${file.name}`;
-        toast(`${importedTrades} trades + ${importedPositions} positions imported from Dhan`);
+        importBatches.push({id:batchId, filename:file.name, importedAt:Date.now(), format:'Dhan Global Transaction Report', tradeCount:importedTrades, positionCount:importedPositions, skippedDuplicates});
+        status.innerHTML = `✅ Detected Dhan Global Transaction Report — imported <b>${importedTrades}</b> closed trade(s) and <b>${importedPositions}</b> new open position(s)${skippedDuplicates?`, skipped <b>${skippedDuplicates}</b> already-imported duplicate row(s)`:''}, from ${file.name}`;
+        toast(`${importedTrades} trades + ${importedPositions} positions imported${skippedDuplicates?`, ${skippedDuplicates} duplicates skipped`:''}`);
       } else if(isDhanPnL){
         ensureBroker_(brokerName);
         rows.forEach((row, idx)=>{
@@ -2290,10 +2407,10 @@ function handleFile(file){
 
           if(closedQty>0){
             const t = {
-              id:'imp'+Date.now()+idx+'a', date:new Date().toISOString().slice(0,10), symbol:symbol.toUpperCase(),
+              id:'imp'+Date.now()+idx+'a', date:toLocalYMD_(new Date()), symbol:symbol.toUpperCase(),
               side:'BUY', product:'intraday', qty:closedQty, entry:buyPrice, exit:sellPrice,
               strategyId: strategies[0].id, broker:brokerName, charges:0,
-              notes:'Imported from Dhan P&L statement (closed quantity)'
+              notes:'Imported from Dhan P&L statement (closed quantity)', importBatchId:batchId
             };
             t.charges = chargesFor(t);
             trades.push(t);
@@ -2303,29 +2420,35 @@ function handleFile(file){
             openPositions.push({
               id:'p'+Date.now()+idx, symbol:symbol.toUpperCase(), product:'carryforward', side:'BUY',
               qty:openQty, avg:buyPrice, ltp: closingPrice>0 ? closingPrice : buyPrice,
-              strategyId: strategies[0].id, broker:brokerName
+              strategyId: strategies[0].id, broker:brokerName, importBatchId:batchId
             });
             importedPositions++;
           }
         });
-        status.innerHTML = `✅ Detected Dhan P&L format — imported <b>${importedTrades}</b> closed trade(s) and <b>${importedPositions}</b> open position(s) from ${file.name}`;
+        importBatches.push({id:batchId, filename:file.name, importedAt:Date.now(), format:'Dhan P&L statement', tradeCount:importedTrades, positionCount:importedPositions, skippedDuplicates:0});
+        status.innerHTML = `✅ Detected Dhan P&L format — imported <b>${importedTrades}</b> closed trade(s) and <b>${importedPositions}</b> open position(s) from ${file.name}. Note: this summary format has no per-transaction ID, so it can't auto-detect duplicates on repeat uploads — use "Clear before import" if re-uploading an overlapping period.`;
         toast(`${importedTrades} trades + ${importedPositions} positions imported from Dhan`);
       } else {
         // generic per-transaction format: date, symbol, side, quantity, price, exit_price, product, strategy, broker, notes
+        let skippedDuplicates = 0;
+        const existingKeys = new Set(trades.map(t=>[t.symbol,t.date,t.side,t.qty,t.entry,t.exit,t.broker].join('|')));
         rows.forEach(row=>{
           const norm = {};
           Object.keys(row).forEach(k=> norm[k.toString().trim().toLowerCase().replace(/\s+/g,'_')] = row[k]);
           const symbol = norm.symbol || norm.scrip || norm.scrip_name || norm.stock;
           if(!symbol) return;
           let date = norm.date || norm.trade_date;
-          if(date instanceof Date) date = date.toISOString().slice(0,10);
+          if(date instanceof Date) date = toLocalYMD_(date);
           else if(typeof date === 'number') date = new Date(Math.round((date-25569)*86400*1000)).toISOString().slice(0,10);
-          else date = (date || new Date().toISOString().slice(0,10)).toString().slice(0,10);
+          else date = (date || toLocalYMD_(new Date())).toString().slice(0,10);
           const qty = +(norm.quantity || norm.qty || 1);
           const entry = +(norm.price || norm.entry_price || norm.buy_price || 0);
           const exit = (norm.exit_price || norm.sell_price) ? +(norm.exit_price || norm.sell_price) : null;
           const side = (norm.side || norm.type || 'BUY').toString().toUpperCase().includes('SELL') ? 'SELL' : 'BUY';
           const product = (norm.product || '').toString().toLowerCase().includes('carry') ? 'carryforward' : 'intraday';
+          const dedupKey = [symbol.toString().toUpperCase(), date, side, qty, entry, exit, (norm.broker||'Unspecified')].join('|');
+          if(existingKeys.has(dedupKey)){ skippedDuplicates++; return; }
+          existingKeys.add(dedupKey);
           let stratMatch = strategies.find(s=>s.name.toLowerCase() === (norm.strategy||'').toString().toLowerCase());
           if(!stratMatch && norm.strategy){ stratMatch = {id:'s'+Date.now()+importedTrades, name: norm.strategy.toString(), color: STRAT_COLORS[strategies.length % STRAT_COLORS.length]}; strategies.push(stratMatch); }
           let rowBroker = (norm.broker || 'Unspecified').toString().trim() || 'Unspecified';
@@ -2333,14 +2456,15 @@ function handleFile(file){
           const importedTrade = {
             id:'imp'+Date.now()+importedTrades, date, symbol: symbol.toString().toUpperCase(), side, product,
             qty, entry, exit, strategyId: stratMatch ? stratMatch.id : strategies[0].id, broker: rowBroker, charges: 0,
-            notes: norm.notes || 'Imported from broker statement'
+            notes: norm.notes || 'Imported from broker statement', importBatchId:batchId
           };
           importedTrade.charges = importedTrade.exit!=null ? chargesFor(importedTrade) : 0;
           trades.push(importedTrade);
           importedTrades++;
         });
-        status.innerHTML = `✅ Imported <b>${importedTrades}</b> trades from ${file.name}`;
-        toast(`${importedTrades} trades imported`);
+        importBatches.push({id:batchId, filename:file.name, importedAt:Date.now(), format:'Generic per-trade format', tradeCount:importedTrades, positionCount:0, skippedDuplicates});
+        status.innerHTML = `✅ Imported <b>${importedTrades}</b> trades from ${file.name}${skippedDuplicates?`, skipped <b>${skippedDuplicates}</b> likely duplicate row(s)`:''}`;
+        toast(`${importedTrades} trades imported${skippedDuplicates?`, ${skippedDuplicates} duplicates skipped`:''}`);
       }
 
       saveState();
@@ -2354,12 +2478,17 @@ function handleFile(file){
 
 /* ================= EXPORTS ================= */
 function tradesToRows(list){
-  return list.map(t=>({
-    Date:t.date, Symbol:t.symbol, Side:t.side, Product:t.product, Strategy:(stratById(t.strategyId)||{}).name||'',
-    Broker:t.broker||'Unspecified', Quantity:t.qty, Entry:t.entry, Exit:t.exit ?? '',
-    GrossPnL: tradeGrossPnl(t) ?? '', Charges: t.exit!=null ? (t.charges||0) : '', NetPnL: tradePnl(t) ?? '',
-    Status: t.exit==null?'OPEN':'CLOSED', Notes:t.notes||''
-  }));
+  return list.map(t=>{
+    const entryDate = t.entryDate || t.date;
+    const exitDate = t.exit!=null ? (t.exitDate || t.date) : '';
+    return {
+      EntryDate:entryDate, ExitDate:exitDate, DaysHeld: t.exit!=null ? daysBetween(entryDate, exitDate) : daysBetween(entryDate, null),
+      Symbol:t.symbol, Side:t.side, Product:t.product, Strategy:(stratById(t.strategyId)||{}).name||'',
+      Broker:t.broker||'Unspecified', Quantity:t.qty, Entry:t.entry, Exit:t.exit ?? '',
+      GrossPnL: tradeGrossPnl(t) ?? '', Charges: t.exit!=null ? (t.charges||0) : '', NetPnL: tradePnl(t) ?? '',
+      Status: t.exit==null?'OPEN':'CLOSED', Notes:t.notes||''
+    };
+  });
 }
 function downloadWorkbook(rows, filename, sheetName='Report'){
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -2425,6 +2554,7 @@ function renderAll(){
   renderStrategyDetail();
   renderCalendar();
   renderAllTradesTable();
+  renderImportHistory();
 }
 
 /* ================= INIT ================= */
