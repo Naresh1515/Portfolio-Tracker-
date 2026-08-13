@@ -398,9 +398,59 @@ tbody tr:hover{ background:var(--panel-2); }
             <button data-seg="carryforward">Carryforward</button>
             <button data-seg="intraday">Intraday</button>
           </div>
-          <select class="select" id="monthSelect"></select>
-          <select class="select" id="brokerFilterDash"><option value="all">All brokers</option></select>
           <button class="btn" id="btnExportDash">↓ Export report</button>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:16px;">
+        <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;">
+          <div>
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Period</label>
+            <div class="segmented" id="periodTypeToggle">
+              <button data-period="all">All Time</button>
+              <button data-period="year">Yearly</button>
+              <button class="active" data-period="month">Monthly</button>
+              <button data-period="range">Custom Range</button>
+            </div>
+          </div>
+          <div id="periodYearWrap" class="hidden">
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Year</label>
+            <select class="select" id="yearSelect"></select>
+          </div>
+          <div id="periodMonthWrap">
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Month</label>
+            <select class="select" id="monthSelect"></select>
+          </div>
+          <div id="periodRangeWrap" class="hidden" style="display:flex; gap:8px;">
+            <div>
+              <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">From</label>
+              <input type="date" id="rangeFrom" class="field">
+            </div>
+            <div>
+              <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">To</label>
+              <input type="date" id="rangeTo" class="field">
+            </div>
+          </div>
+          <div>
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Broker</label>
+            <select class="select" id="brokerFilterDash"><option value="all">All brokers</option></select>
+          </div>
+          <div>
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Strategy</label>
+            <select class="select" id="strategyFilterDash"><option value="all">All strategies</option></select>
+          </div>
+          <div>
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Symbol</label>
+            <input type="text" id="symbolFilterDash" class="field" placeholder="e.g. RELIANCE" style="width:140px;" autocapitalize="none" autocorrect="off" spellcheck="false">
+          </div>
+          <div>
+            <label style="font-size:10.5px; color:var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:.4px; display:block; margin-bottom:6px;">Side</label>
+            <div class="segmented" id="segDashSide">
+              <button class="active" data-seg="all">Buy &amp; Sell</button>
+              <button data-seg="BUY">Buy</button>
+              <button data-seg="SELL">Sell</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -424,6 +474,13 @@ tbody tr:hover{ background:var(--panel-2); }
           </div>
           <canvas id="strategyDonut" height="200"></canvas>
         </div>
+      </div>
+
+      <div class="panel" id="monthlyBreakdownPanel" style="margin-bottom:16px;">
+        <div class="panel-head">
+          <div class="panel-title">Monthly Performance <span class="n" id="monthlyBreakdownSub">P&amp;L by month</span></div>
+        </div>
+        <canvas id="monthlyBreakdownChart" height="90"></canvas>
       </div>
 
       <div class="grid-2" style="grid-template-columns:1fr 1fr;">
@@ -831,7 +888,7 @@ function saveState(syncCloud){
   if(syncCloud===undefined) syncCloud = true; // default: real data changes DO sync; pass false for cosmetic/ephemeral updates like LTP ticks
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl, totalCapital, importBatches,
+      trades, openPositions, opportunities, strategies, brokerConfigs, currentSeg, currentPosSeg, currentBroker, currentPosBroker, currentPosSide, currentOppSeg, currentMonth, periodType, currentYear, rangeFromVal, rangeToVal, currentStrategyFilter, currentSymbolFilter, currentDashSide, liveFeedUrl, syncConfigRaw, syncCode, syncMethod, syncSheetsUrl, totalCapital, importBatches,
       theme: document.body.getAttribute('data-theme'), accent: document.body.getAttribute('data-accent')
     }));
   }catch(e){ console.warn('Save failed', e); }
@@ -928,6 +985,13 @@ let currentPosBroker = (saved && saved.currentPosBroker) || 'all'; // broker fil
 let currentPosSide = (saved && saved.currentPosSide) || 'all';   // Buy/Sell filter (positions)
 let currentOppSeg = (saved && saved.currentOppSeg) || 'all';    // opportunities filter (swing/intraday)
 let currentMonth = (saved && saved.currentMonth) || '2026-08';
+let periodType = (saved && saved.periodType) || 'month'; // 'all' | 'year' | 'month' | 'range'
+let currentYear = (saved && saved.currentYear) || 2026;
+let rangeFromVal = (saved && saved.rangeFromVal) || '';
+let rangeToVal = (saved && saved.rangeToVal) || '';
+let currentStrategyFilter = (saved && saved.currentStrategyFilter) || 'all';
+let currentSymbolFilter = (saved && saved.currentSymbolFilter) || '';
+let currentDashSide = (saved && saved.currentDashSide) || 'all';
 let calMonth = {y:2026, m:7}; // 0-indexed
 let liveFeedUrl = (saved && saved.liveFeedUrl) || '';
 let liveFeedCache = {}; // symbol (uppercase) -> last fetched real price
@@ -995,10 +1059,27 @@ function toast(msg){
   window.__toastT = setTimeout(()=>el.classList.remove('show'), 2600);
 }
 
+function inSelectedPeriod(dateStr){
+  if(!dateStr) return false;
+  if(periodType==='all') return true;
+  if(periodType==='year') return dateStr.slice(0,4)===String(currentYear);
+  if(periodType==='month') return monthKey(dateStr)===currentMonth;
+  if(periodType==='range'){
+    if(rangeFromVal && dateStr<rangeFromVal) return false;
+    if(rangeToVal && dateStr>rangeToVal) return false;
+    return true;
+  }
+  return true;
+}
 function filteredTrades(seg, month, broker){
+  // month/broker params kept for backward compatibility with older call sites; broker still honored,
+  // month is now superseded by the global period system (periodType/currentYear/currentMonth/range)
   return trades.filter(t=>{
-    if(month && monthKey(t.date)!==month) return false;
+    if(!inSelectedPeriod(t.date)) return false;
     if(broker && broker!=='all' && t.broker!==broker) return false;
+    if(currentStrategyFilter!=='all' && t.strategyId!==currentStrategyFilter) return false;
+    if(currentSymbolFilter && !t.symbol.toUpperCase().includes(currentSymbolFilter.toUpperCase())) return false;
+    if(currentDashSide!=='all' && t.side!==currentDashSide) return false;
     if(seg==='all') return true;
     return t.product===seg;
   });
@@ -1052,12 +1133,57 @@ function populateMonthSelect(){
   const arr = [...set].sort();
   const sel = document.getElementById('monthSelect');
   sel.innerHTML = arr.map(m=>`<option value="${m}" ${m===currentMonth?'selected':''}>${monthLabel(m)}</option>`).join('');
-  sel.addEventListener('change', ()=>{ currentMonth = sel.value; saveState(); renderAll(); });
+  sel.onchange = ()=>{ currentMonth = sel.value; saveState(); updatePeriodLabel(); renderAll(); };
+
+  const years = new Set(trades.map(t=>+t.date.slice(0,4)));
+  years.add(currentYear);
+  const yarr = [...years].sort((a,b)=>b-a);
+  const ysel = document.getElementById('yearSelect');
+  ysel.innerHTML = yarr.map(y=>`<option value="${y}" ${y===currentYear?'selected':''}>${y}</option>`).join('');
+  ysel.onchange = ()=>{ currentYear = +ysel.value; saveState(); updatePeriodLabel(); renderAll(); };
 }
 function monthLabel(key){
   const [y,m] = key.split('-').map(Number);
   return new Date(y, m-1, 1).toLocaleString('default',{month:'long', year:'numeric'});
 }
+function updatePeriodLabel(){
+  let label = '';
+  if(periodType==='all') label = 'All Time';
+  else if(periodType==='year') label = String(currentYear);
+  else if(periodType==='month') label = monthLabel(currentMonth);
+  else if(periodType==='range') label = (rangeFromVal||'…')+' → '+(rangeToVal||'…');
+  document.getElementById('monthLabel').textContent = label;
+}
+
+/* ================= PERIOD SYSTEM ================= */
+document.getElementById('periodTypeToggle').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#periodTypeToggle button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  periodType = e.target.dataset.period;
+  document.getElementById('periodYearWrap').classList.toggle('hidden', periodType!=='year');
+  document.getElementById('periodMonthWrap').classList.toggle('hidden', periodType!=='month');
+  document.getElementById('periodRangeWrap').classList.toggle('hidden', periodType!=='range');
+  saveState();
+  updatePeriodLabel();
+  renderDashboard();
+});
+document.getElementById('rangeFrom').addEventListener('change', e=>{ rangeFromVal = e.target.value; saveState(); updatePeriodLabel(); renderDashboard(); });
+document.getElementById('rangeTo').addEventListener('change', e=>{ rangeToVal = e.target.value; saveState(); updatePeriodLabel(); renderDashboard(); });
+document.getElementById('strategyFilterDash').addEventListener('change', e=>{ currentStrategyFilter = e.target.value; saveState(); renderDashboard(); });
+let symbolFilterDebounce_;
+document.getElementById('symbolFilterDash').addEventListener('input', e=>{
+  clearTimeout(symbolFilterDebounce_);
+  symbolFilterDebounce_ = setTimeout(()=>{ currentSymbolFilter = e.target.value.trim(); saveState(); renderDashboard(); }, 350);
+});
+document.getElementById('segDashSide').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#segDashSide button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  currentDashSide = e.target.dataset.seg;
+  saveState();
+  renderDashboard();
+});
 
 /* ================= SEGMENTED FILTERS ================= */
 document.getElementById('segFilter').addEventListener('click', e=>{
@@ -1940,6 +2066,8 @@ function populateStrategySelects(){
   document.getElementById('journalStrategyFilter').innerHTML = '<option value="all">All strategies</option>' + opts;
   document.getElementById('oStrategy').innerHTML = opts;
   document.getElementById('pStrategy').innerHTML = opts;
+  document.getElementById('strategyFilterDash').innerHTML = '<option value="all">All strategies</option>' + opts;
+  document.getElementById('strategyFilterDash').value = currentStrategyFilter;
 }
 function populateBrokerSelects(){
   const bOpts = brokerNames().map(n=>`<option value="${n}">${n}</option>`).join('');
@@ -2529,7 +2657,10 @@ document.getElementById('exportCsv').addEventListener('click', ()=>{
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'all-trades.csv'; a.click();
   toast('Downloaded all-trades.csv');
 });
-document.getElementById('btnExportDash').addEventListener('click', ()=>downloadWorkbook(tradesToRows(filteredTrades(currentSeg, currentMonth, currentBroker)), `portfolio-report-${currentMonth}.xlsx`));
+document.getElementById('btnExportDash').addEventListener('click', ()=>{
+  const periodSlug = periodType==='all' ? 'all-time' : periodType==='year' ? String(currentYear) : periodType==='range' ? `${rangeFromVal||'start'}_to_${rangeToVal||'end'}` : currentMonth;
+  downloadWorkbook(tradesToRows(filteredTrades(currentSeg, currentMonth, currentBroker)), `portfolio-report-${periodSlug}.xlsx`);
+});
 
 /* ================= TICKER ================= */
 function renderTicker(){
@@ -2546,7 +2677,7 @@ function renderDashboard(){
   renderKPIs(); renderEquityChart(); renderDonut(); renderWinLoss(); renderStrategyList();
 }
 function renderAll(){
-  document.getElementById('monthLabel').textContent = monthLabel(currentMonth);
+  updatePeriodLabel();
   renderDashboard();
   renderPositions();
   renderOpportunities();
@@ -2567,6 +2698,14 @@ document.querySelectorAll('#segFilter button').forEach(b=>b.classList.toggle('ac
 document.querySelectorAll('#segPosType button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentPosSeg));
 document.querySelectorAll('#segPosSide button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentPosSide));
 document.querySelectorAll('#segOppType button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentOppSeg));
+document.querySelectorAll('#segDashSide button').forEach(b=>b.classList.toggle('active', b.dataset.seg===currentDashSide));
+document.querySelectorAll('#periodTypeToggle button').forEach(b=>b.classList.toggle('active', b.dataset.period===periodType));
+document.getElementById('periodYearWrap').classList.toggle('hidden', periodType!=='year');
+document.getElementById('periodMonthWrap').classList.toggle('hidden', periodType!=='month');
+document.getElementById('periodRangeWrap').classList.toggle('hidden', periodType!=='range');
+document.getElementById('rangeFrom').value = rangeFromVal;
+document.getElementById('rangeTo').value = rangeToVal;
+document.getElementById('symbolFilterDash').value = currentSymbolFilter;
 updateAlertButtonUI();
 opportunities.forEach(o=>{ if(o.lastSignal===undefined) o.lastSignal = oppSignal(o); });
 openPositions.forEach(p=>{ if(p.lastSignal===undefined) p.lastSignal = positionSignal(p); });
