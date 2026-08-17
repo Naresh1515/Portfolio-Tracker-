@@ -238,6 +238,7 @@ tbody tr:hover{ background:var(--panel-2); }
 .badge.sig-buy{ background:var(--profit-dim); color:var(--profit); }
 .badge.sig-sell{ background:var(--loss-dim); color:var(--loss); }
 .badge.sig-notrade{ background:rgba(123,132,150,.18); color:var(--text-faint); }
+.badge.sig-hold{ background:rgba(240,185,11,.15); color:var(--gold); }
 .badge.swing{ background:rgba(240,185,11,.15); color:var(--gold); }
 .side-buy{ color:var(--profit); font-weight:700; }
 .side-sell{ color:var(--loss); font-weight:700; }
@@ -624,7 +625,7 @@ tbody tr:hover{ background:var(--panel-2); }
         </table>
         </div>
         <div style="margin-top:10px; font-size:11px; color:var(--text-faint); line-height:1.6;">
-          <b>Qty</b> is sized automatically from Risk Amount ÷ |Entry − Stop Loss|. <b>Signal</b> updates live: <b>BUY</b> when price returns to your entry zone (long) or short-entry zone (short) without hitting stop loss; <b>SELL</b> when target is reached; <b>NO TRADE</b> when stop loss is hit or price hasn't reached your planned zone yet. Use <b>Mark as Taken</b> to move a triggered idea into Open Positions once you've actually entered it.
+          <b>Qty</b> is sized automatically from Risk Amount ÷ |Entry − Stop Loss|. <b>Signal</b> is entry-gated: <b>BUY</b> fires once, when price first reaches your entry zone — that's the only alert you'll get here. <b>NO TRADE</b> means still waiting, or the setup was invalidated by hitting stop loss before ever entering. Once entered, the row shows <b>HOLD</b> (still open) or <b>SELL</b> (target or stop loss reached) for reference only — no further alerts fire from this page. Use <b>Mark as Taken</b> to move it into Open Positions, where target &amp; stop-loss alerts take over properly.
         </div>
       </div>
     </section>
@@ -1493,10 +1494,20 @@ function fireOppAlert(o, signal){
 function checkOppAlerts(){
   opportunities.forEach(o=>{
     const signal = oppSignal(o);
-    if(o.lastSignal===undefined){ o.lastSignal = signal; return; } // don't alert on first load
-    if(signal!==o.lastSignal && (signal==='BUY' || signal==='SELL')){
-      fireOppAlert(o, signal);
+    const isEntrySignal = (o.side==='BUY' && signal==='BUY') || (o.side==='SELL' && signal==='SELL');
+    if(o.lastSignal===undefined){
+      // first load: initialize silently — if this opportunity was already past its entry zone when the
+      // app loaded, mark it triggered without alerting, so we don't spam a notification for old state
+      if(!o.entryTriggered && isEntrySignal) o.entryTriggered = true;
+      o.lastSignal = signal;
+      return;
     }
+    if(!o.entryTriggered && isEntrySignal && signal!==o.lastSignal){
+      fireOppAlert(o, signal); // the one and only entry alert for this opportunity
+      o.entryTriggered = true;
+    }
+    // after entry, no further Opportunity-level alerts fire — target/stop-loss alerting belongs to
+    // Open Positions once you actually take the trade ("Mark as Taken")
     o.lastSignal = signal;
   });
 }
@@ -1951,17 +1962,27 @@ function oppPctToTarget(o){
   return ((o.target - o.ltp)/o.ltp*100*dir);
 }
 function oppSignal(o){
-  // Long setup: buy when price returns to/below entry (without breaching stop), sell when target hit, else no trade
+  if(o.entryTriggered){
+    // Already entered — this is now informational only (for the table display). Alerting for
+    // target/stop-loss belongs to Open Positions once you actually take the trade ("Mark as Taken").
+    if(o.side==='BUY'){
+      if(o.ltp>=o.target) return 'SELL';
+      if(o.ltp<=o.stopLoss) return 'SELL';
+    } else {
+      if(o.ltp<=o.target) return 'BUY';
+      if(o.ltp>=o.stopLoss) return 'BUY';
+    }
+    return 'HOLD';
+  }
+  // Not yet entered — the only thing that can trigger is price reaching your entry zone (or the setup
+  // being invalidated by hitting stop loss first). Target can never fire here — you haven't taken the trade.
   if(o.side==='BUY'){
     if(o.ltp<=o.stopLoss) return 'NO TRADE';
     if(o.ltp<=o.entry) return 'BUY';
-    if(o.ltp>=o.target) return 'SELL';
     return 'NO TRADE';
   } else {
-    // Short setup: mirror logic
     if(o.ltp>=o.stopLoss) return 'NO TRADE';
     if(o.ltp>=o.entry) return 'SELL';
-    if(o.ltp<=o.target) return 'BUY';
     return 'NO TRADE';
   }
 }
@@ -1973,7 +1994,7 @@ function renderOpportunities(){
     const pct = oppPctFromEntry(o);
     const pctTarget = oppPctToTarget(o);
     const signal = oppSignal(o);
-    const sigClass = signal==='BUY' ? 'sig-buy' : signal==='SELL' ? 'sig-sell' : 'sig-notrade';
+    const sigClass = signal==='BUY' ? 'sig-buy' : signal==='SELL' ? 'sig-sell' : signal==='HOLD' ? 'sig-hold' : 'sig-notrade';
     const isLive = liveFeedCache[o.symbol.toUpperCase()] != null;
     return `<tr>
       <td class="name-cell">${o.symbol}</td>
@@ -2034,25 +2055,40 @@ document.getElementById('segOppType').addEventListener('click', e=>{
 });
 document.getElementById('btnAddOpportunity').addEventListener('click', ()=>{
   document.getElementById('oppFormPanel').classList.remove('hidden');
+  document.getElementById('oTotalCapital').value = totalCapital;
 });
 document.getElementById('btnCancelOpportunity').addEventListener('click', ()=>{
   document.getElementById('oppFormPanel').classList.add('hidden');
+});
+document.getElementById('oRiskModeToggle').addEventListener('click', e=>{
+  if(e.target.tagName!=='BUTTON') return;
+  document.querySelectorAll('#oRiskModeToggle button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  const mode = e.target.dataset.mode;
+  document.getElementById('oRiskAbsoluteWrap').classList.toggle('hidden', mode!=='absolute');
+  document.getElementById('oRiskPercentWrap').classList.toggle('hidden', mode!=='percent');
 });
 document.getElementById('btnSaveOpportunity').addEventListener('click', ()=>{
   const symbol = document.getElementById('oSymbol').value.trim().toUpperCase();
   const entry = +document.getElementById('oEntry').value;
   const stopLoss = +document.getElementById('oStopLoss').value;
   const target = +document.getElementById('oTarget').value;
-  const riskAmount = +document.getElementById('oRisk').value;
-  if(!symbol || !entry || !stopLoss || !target || !riskAmount){ toast('Symbol, entry, stop loss, target and risk amount are all required'); return; }
+  const riskMode = document.querySelector('#oRiskModeToggle button.active').dataset.mode;
+  const riskAmount = riskMode==='absolute' ? +document.getElementById('oRisk').value : 0;
+  const riskPct = riskMode==='percent' ? +document.getElementById('oRiskPct').value : 0;
+  const capitalAtEntry = +document.getElementById('oTotalCapital').value || totalCapital;
+  if(!symbol || !entry || !stopLoss || !target || (riskMode==='absolute' ? !riskAmount : !riskPct)){
+    toast('Symbol, entry, stop loss, target, and a risk amount (or %) are all required'); return;
+  }
   const o = {
     id:'o'+Date.now(), symbol, side: document.getElementById('oSide').value,
     tradeType: document.getElementById('oType').value, strategyId: document.getElementById('oStrategy').value,
-    entry, stopLoss, target, riskAmount, ltp: entry, broker: document.getElementById('oBroker').value,
-    notes: document.getElementById('oNotes').value.trim()
+    entry, stopLoss, target, riskMode, riskAmount, riskPct, capitalAtEntry, ltp: entry,
+    broker: document.getElementById('oBroker').value, notes: document.getElementById('oNotes').value.trim(),
+    entryTriggered: false
   };
   opportunities.push(o);
-  ['oSymbol','oEntry','oStopLoss','oTarget','oRisk','oNotes'].forEach(id=>document.getElementById(id).value='');
+  ['oSymbol','oEntry','oStopLoss','oTarget','oRisk','oRiskPct','oNotes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('oppFormPanel').classList.add('hidden');
   saveState();
   renderOpportunities();
