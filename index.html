@@ -712,6 +712,23 @@ tbody tr:hover{ background:var(--panel-2); }
 
       <div class="panel">
         <div class="panel-head">
+          <div class="panel-title">Full Backup &amp; Restore <span class="n">move everything to a new device or a newer version of this dashboard</span></div>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+          <button class="btn primary" id="btnExportFullBackup">↓ Download full backup (.json)</button>
+          <button class="btn" id="btnRestoreFullBackup">↑ Restore from backup file</button>
+          <input type="file" id="fullBackupInput" accept=".json" class="hidden">
+        </div>
+        <div id="backupStatus" style="font-size:12px; color:var(--text-dim); margin-bottom:6px;"></div>
+        <div style="font-size:11.5px; color:var(--text-faint); line-height:1.7;">
+          This single file contains <b>everything</b>: all trades (Journal/All Trades), open positions, opportunities/watchlist, strategies, broker &amp; charges settings, and import history. It does <b>not</b> include your Cloud Sync credentials or Live Feed URL, for safety — reconnect those separately after restoring.<br>
+          <b>To move to a new dashboard file or device:</b> on the old dashboard, click "Download full backup" — you'll get a file like <code>ledger-backup-2026-08-09.json</code>. Open the new dashboard, come to this same panel, click "Restore from backup file", and pick that file. Everything loads instantly — no internet or cloud setup required.<br>
+          If you already have <b>Cloud Sync</b> connected below on the old dashboard, that's an even faster automatic option: just connect the new dashboard with the exact same Firebase config/code (or the same Google Sheets URL) and it pulls everything down on its own within seconds — skip the manual backup file entirely.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
           <div class="panel-title">Cloud Sync <span class="n">same dashboard on every device</span></div>
           <span id="syncStatusBadge" class="badge sig-notrade">Not connected</span>
         </div>
@@ -901,6 +918,51 @@ function loadState(){
     return raw ? JSON.parse(raw) : null;
   }catch(e){ return null; }
 }
+function exportFullBackup(){
+  const backup = {
+    _type: 'ledger-terminal-backup', _version: 1, exportedAt: new Date().toISOString(),
+    trades, openPositions, opportunities, strategies, brokerConfigs, importBatches, totalCapital
+    // deliberately excludes syncConfigRaw/syncCode/syncSheetsUrl/liveFeedUrl — reconnect those manually after restoring, for safety
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ledger-backup-${toLocalYMD_(new Date())}.json`;
+  a.click();
+  toast('Full backup downloaded');
+}
+function restoreFullBackup(file){
+  const status = document.getElementById('backupStatus');
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    let data;
+    try{ data = JSON.parse(e.target.result); }
+    catch(err){ status.textContent = '⚠ That file is not valid JSON.'; return; }
+    if(!data || !Array.isArray(data.trades) || !Array.isArray(data.openPositions)){
+      status.textContent = '⚠ That does not look like a Ledger Terminal backup file.';
+      return;
+    }
+    if(!confirm(`Restore this backup from ${data.exportedAt ? new Date(data.exportedAt).toLocaleString() : 'unknown date'}? This REPLACES all current trades, positions, opportunities, strategies, and broker settings on this device. This cannot be undone.`)) return;
+    trades = data.trades || [];
+    openPositions = data.openPositions || [];
+    opportunities = data.opportunities || [];
+    if(data.strategies && data.strategies.length) strategies = data.strategies;
+    if(data.brokerConfigs && data.brokerConfigs.length) brokerConfigs = data.brokerConfigs;
+    importBatches = data.importBatches || [];
+    if(data.totalCapital) totalCapital = data.totalCapital;
+    saveState();
+    populateStrategySelects(); populateBrokerSelects(); renderBrokerConfig(); populateMonthSelect(); renderAll();
+    status.textContent = `✅ Restored ${trades.length} trades, ${openPositions.length} positions, ${opportunities.length} opportunities.`;
+    toast('Backup restored');
+  };
+  reader.readAsText(file);
+}
+document.getElementById('btnExportFullBackup').addEventListener('click', exportFullBackup);
+document.getElementById('btnRestoreFullBackup').addEventListener('click', ()=>document.getElementById('fullBackupInput').click());
+document.getElementById('fullBackupInput').addEventListener('change', e=>{
+  if(e.target.files.length) restoreFullBackup(e.target.files[0]);
+  e.target.value = '';
+});
 
 /* ================= STATE ================= */
 const STRAT_COLORS = ['#F0B90B','#3AC7E8','#8B7CF6','#26C6A0','#EF5A6F','#F08A5D'];
